@@ -331,9 +331,9 @@ def _grow(mask, r):
     return out
 
 
-def render(A, B, starts, scale=0.5, shear=True, ores=True):
-    """In-game-like picture of the full map: rivers in light blue, stone fields as light dots, optionally ore.
-    Returns a PIL image."""
+def render(A, B, starts, scale=0.5, shear=True, details=True):
+    """In-game-like picture of the full map. details=False shows only what the lobby preview shows (water, land,
+    mountain); details=True adds rivers (light blue), stone fields (grey) and ore. Returns a PIL image."""
     n = A.shape[0]
     t = A[:, :, 1]; h = A[:, :, 0].astype(float)
     pal = np.zeros((256, 3), np.uint8); pal[:] = (90, 150, 60)
@@ -344,15 +344,16 @@ def render(A, B, starts, scale=0.5, shear=True, ores=True):
     pal[32] = (120, 115, 110); pal[33] = (140, 130, 105); pal[35] = (200, 200, 205)
     pal[48] = (210, 200, 140); pal[64] = (220, 190, 110); pal[65] = (180, 170, 90)
     pal[128] = (240, 240, 250); pal[129] = (190, 190, 200)
+    pal[96:100] = pal[16]  # river looks like grass in the lobby preview
     img = pal[t].astype(float)
     gx = np.gradient(h, axis=1); gy = np.gradient(h, axis=0)
     img *= np.clip(1 + 0.04 * (gx + gy), 0.6, 1.4)[:, :, None]
-    # rivers are thin and stones single tiles: draw both a little bigger so they show up at picture size
-    river = _grow(np.isin(t, RIVER_T), max(1, int(round(1 / scale))))
-    img[river] = RIVER_RGB
-    stones = _grow(np.isin(B[:, :, 0], STONE_OBJ), max(1, int(round(1.5 / scale))))
-    img[stones] = STONE_RGB
-    if ores:
+    if details:
+        # rivers are thin and stones single tiles: draw both a little bigger so they show up at picture size
+        river = _grow(np.isin(t, RIVER_T), max(1, int(round(1 / scale))))
+        img[river] = RIVER_RGB
+        stones = _grow(np.isin(B[:, :, 0], STONE_OBJ), max(1, int(round(1.5 / scale))))
+        img[stones] = STONE_RGB
         ore = B[:, :, 3] >> 4; amt = B[:, :, 3] & 15
         on = (amt > 0) & np.isin(t, MOUNTAIN_T)
         col = {1: (40, 40, 40), 2: (190, 90, 60), 3: (250, 210, 40), 4: (230, 230, 90), 5: (235, 235, 235)}

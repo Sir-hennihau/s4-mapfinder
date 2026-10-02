@@ -113,10 +113,11 @@ found in earlier runs that you haven't seen yet are shown first, instantly.
 - **Map cards:** preview, key and score. Click a card to show it on the right; **Copy** copies its key.
 - **Big picture:** drawn like the in-game minimap: a slanted map, red circles for team 1 (P1–P3) and blue for team 2
   (P4–P6). In lobby preview mode it shows exactly what the lobby preview shows: water, land, mountain (grey) and
-  desert. In full map mode it is the whole map, with rivers in light blue and stone fields in grey.
-- **Show mines** (top right, full map mode only): off by default, like the lobby preview. Turn it on to see ore on
-  the mountains: dark speckles are coal, red iron, yellow gold, pale yellow sulfur, white stone. It switches the big
-  picture and the thumbnails.
+  desert. In full map mode it is the whole generated map.
+- **Show full details** (top right, full map mode only): off by default, so the full map looks like the lobby
+  preview would show it. Turn it on to also see what the preview hides: rivers in light blue, stone fields in grey,
+  and ore speckles on the mountains (dark = coal, red = iron, yellow = gold, pale yellow = sulfur, white = stone).
+  It switches the big picture and the thumbnails.
 - **Stats table**, one row per player plus a *weakest* row (the lowest value of each column). Lobby preview mode
   shows the first five columns; full map mode shows all of them (scroll sideways if the window is narrow):
 

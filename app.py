@@ -44,9 +44,10 @@ LEGEND = {
         "A player's area is their side of the mirror axis, shared with teammates by distance (each tile counts for "
         "one player), up to the wide radius. Space = buildable grass, Mountain = mountain tiles (snow weighted by the "
         "Scoring tab's snow factor, as it has no ore), Snow = snow tiles, “≤ n” = only within n tiles of the castle, "
-        "Fields = separate mountain patches. Gold … Sulfur = tiles with that ore, Stones = stone tiles to quarry "
-        "(grey in the picture), River = river tiles (light blue). With “Show mines”, speckles on mountains show "
-        "the ore: dark = coal, red = iron, yellow = gold, pale yellow = sulfur, white = stone. Red P1–P3 / blue P4–P6 are the two mirror sides."),
+        "Fields = separate mountain patches. Gold … Sulfur = tiles with that ore, Stones = stone tiles to quarry, "
+        "River = river tiles. The picture looks like the lobby preview; “Show full details” adds rivers (light "
+        "blue), stone fields (grey) and ore speckles on the mountains: dark = coal, red = iron, yellow = gold, "
+        "pale yellow = sulfur, white = stone. Red P1–P3 / blue P4–P6 are the two mirror sides."),
 }
 THUMB = (210, 140)
 
@@ -67,7 +68,7 @@ class App:
         self.search = None
         self.store = None
         self.rows = []           # rows currently listed
-        self.thumbs = {}         # (key, ores) -> PhotoImage (keep references!)
+        self.thumbs = {}         # (key, mode, details) -> PhotoImage (keep references!)
         self.cards = {}
         self.card_imgs = {}      # key -> thumbnail label of its card
         self._par_job = None
@@ -208,9 +209,11 @@ class App:
         self.b_copy = ttk.Button(hdr, text="Copy key", style="Big.TButton", command=self._copy_selected, state="disabled")
         self.b_copy.pack(side="left", padx=12)
         self.l_score = ttk.Label(hdr, text="", style="Score.TLabel"); self.l_score.pack(side="left", padx=6)
-        self.v_ores = tk.BooleanVar(value=False)  # like the lobby preview: mines hidden unless asked for
-        self.c_ores = ttk.Checkbutton(hdr, text="Show mines", variable=self.v_ores, command=self._toggle_ores)
-        self.c_ores.pack(side="right")
+        # like the lobby preview: rivers, stone fields and mines hidden unless asked for
+        self.v_details = tk.BooleanVar(value=False)
+        self.c_details = ttk.Checkbutton(hdr, text="Show full details", variable=self.v_details,
+                                         command=self._toggle_details)
+        self.c_details.pack(side="right")
         self.l_info = ttk.Label(det, text="", style="Muted.TLabel"); self.l_info.grid(row=1, column=0, sticky="w")
         self.big = tk.Label(det, bg="#121212", text="Press “Find new maps” to start.", fg="#aaa", font=("Segoe UI", 12))
         self.big.grid(row=2, column=0, sticky="nsew", pady=8)
@@ -269,7 +272,7 @@ class App:
         self.l_mode.configure(text=(
             "Fully generates the best maps (~15 s each) and also scores ore, stone, rivers and snow."
             if full else "Scores only what the game's lobby preview shows: water, land and mountain. Fast."))
-        self.c_ores.configure(state="normal" if full else "disabled")
+        self.c_details.configure(state="normal" if full else "disabled")
         self.tree.configure(displaycolumns=[k for k, _ in STAT_COLS] if full else PREVIEW_COLS)
         self.legend.configure(text=LEGEND[mode])
         used = set(analyze.lines_for(mode))
@@ -539,23 +542,23 @@ class App:
 
     def _thumb(self, r):
         key, mode = r["key"], r.get("mode", "full")
-        ores = self.v_ores.get() and mode == "full"
-        if (key, mode, ores) not in self.thumbs:
-            p = self._image_path(key, mode, ores)
+        det = self.v_details.get() and mode == "full"
+        if (key, mode, det) not in self.thumbs:
+            p = self._image_path(key, mode, det)
             try:
                 im = Image.open(p); im.thumbnail(self.thumb, Image.LANCZOS)
-                self.thumbs[key, mode, ores] = ImageTk.PhotoImage(im)
+                self.thumbs[key, mode, det] = ImageTk.PhotoImage(im)
             except OSError:
                 return None
-        return self.thumbs[key, mode, ores]
+        return self.thumbs[key, mode, det]
 
-    def _image_path(self, key, mode="full", ores=False):
+    def _image_path(self, key, mode="full", details=False):
         d = s4key.decode(key)
         img = os.path.join(engine.Store.dir_for(DATA, **{k: d[k] for k in ("players", "size", "land", "minerals", "mirror")}), "img")
-        p = engine.image_path(img, key, mode, ores)
+        p = engine.image_path(img, key, mode, details)
         return p if os.path.exists(p) else engine.image_path(img, key, mode)
 
-    def _toggle_ores(self):
+    def _toggle_details(self):
         for key, (lbl, r) in self.card_imgs.items():
             try:
                 lbl.configure(image=self._thumb(r))
@@ -625,7 +628,7 @@ class App:
     def _load_big(self, r):
         mode = r.get("mode", "full")
         try:
-            self._big_src = Image.open(self._image_path(r["key"], mode, self.v_ores.get() and mode == "full")).convert("RGB")
+            self._big_src = Image.open(self._image_path(r["key"], mode, self.v_details.get() and mode == "full")).convert("RGB")
         except OSError:
             self._big_src = None
         self._show_big()

@@ -121,8 +121,9 @@ def stage2(job):
         per = analyze.evaluate_tiles(A, B, starts, radius=int(P["radius"] * size / 1024),
                                      near=int(P["near"] * size / 1024),
                                      mirror=d["mirror"])
-        for ores, suffix in ((False, ""), (True, "_ores")):  # in-game style (no mines) + with mines
-            analyze.render(A, B, starts, scale=1024 / size, ores=ores).save(os.path.join(img_dir, key + suffix + ".png"))
+        for details, suffix in ((False, ""), (True, "_details")):  # like the lobby preview + everything
+            analyze.render(A, B, starts, scale=1024 / size, details=details).save(
+                os.path.join(img_dir, key + suffix + ".png"))
         return key, analyze.score_tiles(per, size, d["players"], P), per, [list(s) for s in starts]
     except Exception as e:
         return key, -1.0, str(e), []
@@ -156,10 +157,10 @@ def _tag(params, keys):
 
 
 # ------------------------------------------------------------------ persistent store
-def image_path(img_dir, key, mode="full", ores=False):
+def image_path(img_dir, key, mode="full", details=False):
     if mode == "preview":
         return os.path.join(img_dir, key + "_pv.png")
-    return os.path.join(img_dir, key + ("_ores" if ores else "") + ".png")
+    return os.path.join(img_dir, key + ("_details" if details else "") + ".png")
 
 
 def _load(path, default):
@@ -212,8 +213,8 @@ class Store:
     def key(self, seed):
         return s4key.encode(seed, **self.settings)
 
-    def image(self, key, ores=False):
-        return image_path(self.img, key, self.mode, ores)
+    def image(self, key, details=False):
+        return image_path(self.img, key, self.mode, details)
 
     def current(self, key):
         d = self.deep.get(key)
