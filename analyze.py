@@ -100,35 +100,62 @@ def team_sides(starts, mirror, n):
     return [int(f(x, y) < 0) for x, y in starts]
 
 
-def partition(passable, starts, scale, rmax, mirror=None, n_tiles=1024):
-    """-> owner (-1 = nobody/enemy half unreachable), distance to own castle (tiles), team per player."""
+def side_share(h, w, scale, mirror, n, sub):
+    """Share of each analysis cell that lies on side 1 (f < 0) of the mirror axis, from sub x sub sample tiles
+    per cell. Tiles exactly on the axis count half for each side."""
+    f, _ = _mirror_fn(mirror, n)
+    off = (np.arange(sub) + 0.5) / sub
+    ty = np.floor((np.arange(h)[:, None] + off) * scale).reshape(-1)
+    tx = np.floor((np.arange(w)[:, None] + off) * scale).reshape(-1)
+    F = f(tx[None, :], ty[:, None])
+    s1 = (F < 0) + 0.5 * (F == 0)
+    return s1.reshape(h, sub, w, sub).mean((1, 3))
+
+
+def zones(passable, starts, scale, rmax, mirror=None, n_tiles=1024, sub=4):
+    """Split the land between the players -> list of (weight, owner, dist) per zone.
+
+    weight = share of each cell that belongs to the zone, owner = player per cell (-1 = nobody),
+    dist = distance to that player's castle in tiles. With a mirror axis each team's zone is its own half;
+    cells the axis runs through are shared out by their tiles, so both halves are exactly mirrored.
+    Without an axis there is one zone and every cell goes to the nearest castle."""
     sides = team_sides(starts, mirror, n_tiles)
-    if sides is None:  # no mirror axis: plain nearest-castle split, teams = P1..P3 vs P4..P6
+    if sides is None:
         owner, dist = territories(passable, starts, scale, rmax)
-        return owner, dist.astype(float) * scale, [int(i >= len(starts) // 2) for i in range(len(starts))]
-    f, _ = _mirror_fn(mirror, n_tiles)
+        return [(np.ones(passable.shape), owner, np.where(owner >= 0, dist * scale, np.inf))]
     h, w = passable.shape
-    cy, cx = np.mgrid[0:h, 0:w]
-    side_of_cell = (f((cx + 0.5) * scale, (cy + 0.5) * scale) < 0).astype(int)
-    owner = np.full((h, w), -1, np.int8)
-    dist = np.full((h, w), np.inf)
-    for t in (0, 1):
-        members = [i for i, s in enumerate(sides) if s == t]
-        o, d = territories(passable & (side_of_cell == t), [starts[i] for i in members], scale, rmax)
-        sel = (o >= 0) & (side_of_cell == t)
-        owner[sel] = np.array(members, np.int8)[o[sel]]
-        dist[sel] = d[sel] * scale
-    return owner, dist, sides
+    s1 = side_share(h, w, scale, mirror, n_tiles, sub)
+    out = []
+    for t, wt in ((0, 1 - s1), (1, s1)):
+        members = np.array([i for i, s in enumerate(sides) if s == t], np.int8)
+        o, d = territories(passable & (wt > 0), [starts[i] for i in members], scale, rmax)
+        o[wt <= 0] = -1  # a castle cell is seeded even if the BFS mask excludes it
+        owner = np.where(o >= 0, members[np.maximum(o, 0)], -1).astype(np.int8)
+        out.append((wt, owner, np.where(o >= 0, d * scale, np.inf)))
+    return out
 
 
-def field_counts(lab, owner, msec, n, min_share):
+def zone_sum(zs, val, i, near=None):
+    """Player i's total of a per-cell value over all zones (optionally only within `near` tiles of the castle).
+    val is one array (weighted by each zone's cell share) or a list with one already-split array per zone."""
+    tot = 0.0
+    for z, (wt, owner, dist) in enumerate(zs):
+        sel = owner == i
+        if near is not None:
+            sel = sel & (dist <= near)
+        tot += float((val[z] if isinstance(val, list) else val * wt)[sel].sum())
+    return tot
+
+
+def field_counts(lab, zs, msec, n, min_share):
     """Mountain patches per player, without double counting: a patch counts for the player holding the
     largest share of it (if >= min_share); another player counts it too only when the patch is genuinely
     split (they hold >= SPLIT_SHARE of it and >= min_share)."""
     fields = [0] * n
     for b in range(1, int(lab.max()) + 1):
         sel = lab == b
-        shares = np.array([msec[sel & (owner == i)].sum() for i in range(n)])
+        part = [v * sel for v in msec] if isinstance(msec, list) else msec * sel
+        shares = np.array([zone_sum(zs, part, i) for i in range(n)])
         tot = shares.sum()
         if tot <= 0:
             continue
@@ -168,15 +195,11 @@ def evaluate_preview(pv, starts, size=1024, radius_tiles=200, mirror=None, near_
     """Per-player metrics. Units: 'cells' are preview pixels (~6.4x6.4 tiles)."""
     scale = size / PV
     water, mtn, build = classify(pv)
-    owner, d1, _ = partition(~water, starts, scale, int(radius_tiles / scale), mirror, size)
+    zs = zones(~water, starts, scale, int(radius_tiles / scale), mirror, size, sub=8)
     lab, _ = blobs(mtn > 0)
-    fields = field_counts(lab, owner, mtn, len(starts), 4)
-    res = []
-    for i in range(len(starts)):
-        mine = owner == i
-        res.append(dict(space=int((mine & build).sum()), mtn=round(float(mtn[mine].sum()), 1),
-                        mtn_near=round(float(mtn[mine & (d1 <= near_tiles)].sum()), 1), fields=fields[i]))
-    return res
+    fields = field_counts(lab, zs, mtn, len(starts), 4)
+    return [dict(space=int(round(zone_sum(zs, build, i))), mtn=round(zone_sum(zs, mtn, i), 1),
+                 mtn_near=round(zone_sum(zs, mtn, i, near_tiles), 1), fields=fields[i]) for i in range(len(starts))]
 
 
 def area_factor(size=1024, players=6):
@@ -226,20 +249,27 @@ def evaluate_tiles(A, B, starts, radius=200, near=150, mirror=None):
     m = n // BLK
     blk = lambda a: a.reshape(m, BLK, m, BLK).sum((1, 3))
     water_b = blk(water) > BLK * BLK // 2
-    owner, d1, _ = partition(~water_b, starts, BLK, radius // BLK, mirror, n)
-    mtn_b = blk(mtn); build_b = blk(build); snow_b = blk(snow)
-    ore_b = {k: blk((ore == k) & ore_ok) for k in ORES}
-    lab, _ = blobs(mtn_b >= BLK * BLK // 2)
-    fields = field_counts(lab, owner, mtn_b - snow_b, len(starts), 200)  # a field = >= ~200 mineable tiles
+    zs = zones(~water_b, starts, BLK, radius // BLK, mirror, n)
+    # each team only gets the tiles on its side of the mirror axis (axis tiles count half): split every
+    # tile layer by side first, then sum it into blocks per team
+    if len(zs) == 2:
+        s1 = side_share(n, n, 1, mirror, n, 1)
+        side_w = [1 - s1, s1]
+    else:
+        side_w = [1.0]
+    split = lambda a: [blk(a * sw) for sw in side_w]
+    mtn_z, build_z, snow_z = split(mtn), split(build), split(snow)
+    ore_z = {k: split((ore == k) & ore_ok) for k in ORES}
+    lab, _ = blobs(blk(mtn) >= BLK * BLK // 2)
+    mineable = [a - b for a, b in zip(mtn_z, snow_z)]
+    fields = field_counts(lab, zs, mineable, len(starts), 200)  # a field = >= ~200 mineable tiles
     res = []
+    q = lambda v, i, d=None: int(round(zone_sum(zs, v, i, d)))
     for i in range(len(starts)):
-        mine = owner == i
-        close = mine & (d1 <= near)
-        r = dict(space=int(build_b[mine].sum()), space_near=int(build_b[close].sum()),
-                 mtn=int(mtn_b[mine].sum()), mtn_near=int(mtn_b[close].sum()), fields=fields[i],
-                 snow=int(snow_b[mine].sum()), snow_near=int(snow_b[close].sum()))
+        r = dict(space=q(build_z, i), space_near=q(build_z, i, near), mtn=q(mtn_z, i), mtn_near=q(mtn_z, i, near),
+                 fields=fields[i], snow=q(snow_z, i), snow_near=q(snow_z, i, near))
         for k, name in ORES.items():
-            r[name] = int(ore_b[k][mine].sum())
+            r[name] = q(ore_z[k], i)
         res.append(r)
     return res
 

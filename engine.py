@@ -8,8 +8,8 @@ import analyze
 import s4key
 
 SUPPORTED_MD5 = "153c49ab29946c21d50a3ae7a95c5cf8"
-SCORE_VERSION = 3         # bump when the stored per-player metrics change: older maps get regenerated
-PREVIEW_VERSION = 2       # bump when the pre-screen changes: the seed scan starts over
+SCORE_VERSION = 4         # bump when the stored per-player metrics change: older maps get regenerated
+PREVIEW_VERSION = 3       # bump when the pre-screen changes: the seed scan starts over
 DEFAULT_GAME_DIRS = [
     r"D:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\games\thesettlers4",
     r"C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\games\thesettlers4",
