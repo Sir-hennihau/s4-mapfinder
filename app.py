@@ -318,7 +318,8 @@ class App:
             self.score_widgets[line] = (lbl, (t, w)); i += 1
         ttk.Label(sc, style="Muted.TLabel", wraplength=wrap, justify="left", text=(
             "Target = what the weakest player needs for full points (tiles, for 1024 and 6 players; scaled otherwise). "
-            "Fairness = weakest ÷ strongest. Weights are relative, 0 = off.")).grid(
+            "Fairness = weakest ÷ strongest. Weights are relative, 0 = off. In full map mode the mountain lines "
+            "keep the share they have in lobby preview mode; space and the full-map lines split the rest.")).grid(
             row=i, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
         bot = ttk.Frame(tab); bot.grid(row=2, column=0, sticky="ew", pady=(8, 0))

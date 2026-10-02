@@ -200,6 +200,11 @@ random maps).
   proportion (half the target gives half the points); above it there is no bonus.
 - **Weight:** how much the line counts. Weights are relative: the score is the weighted average of the lines,
   so 30/30 is the same as 1/1. A weight of 0 turns the line off.
+- **Mountain keeps its share in full map mode.** Mountain matters most, so the three mountain lines (Mountain,
+  Mountain close, Mountain fairness) make up the same share of the score in both modes: 61 % with the defaults.
+  In full map mode, space and the full-map-only lines (ore, stone fields, river) split the remaining 39 % by their
+  weights. So the extra lines take their points from space, never from mountain; with the defaults, space gets
+  20 %, ore 10 %, stone fields 6 % and river 3 %.
 - **Scaling:** tile targets are meant for 1024×1024 with 6 players. For other settings they are scaled by the land
   available per player (a 512 map has a quarter of the area; 4 players get 1.5× as much each), so you don't need to
   change them when you switch settings.
@@ -249,10 +254,10 @@ diagonal):
 | --- | --- | --- |
 | LSGUKDC0 | 99 | 96 |
 | LSG5JJE0 | 100 | 99 |
-| LSGFG8O0 | 95 | 85 |
-| LSG2NBQ0 | 92 | 90 |
-| LSGKKUJ0 | 89 | 72 |
-| LSG2H840 | 72 (P2/P5 are short on mountain) | 56 |
+| LSGFG8O0 | 93 | 85 |
+| LSG2NBQ0 | 90 | 90 |
+| LSGKKUJ0 | 91 | 72 |
+| LSG2H840 | 67 (P2/P5 are short on mountain) | 56 |
 
 Typical bad random maps score 20–60.
 

@@ -182,6 +182,7 @@ DEFAULT_PARAMS = dict(
 GEO_KEYS = ("radius", "near")  # change the per-player metrics: maps must be generated again
 # score lines; snow = how much a snow tile counts compared with plain rock (snow never has ore under it)
 PREVIEW_LINES = ("mtn", "mtn_near", "space", "space_near", "fair_mtn", "fair_space")
+MOUNTAIN_LINES = ("mtn", "mtn_near", "fair_mtn")  # keep the same share of the score in both modes
 FULL_LINES = PREVIEW_LINES + ("gold", "coal", "iron", "stone", "sulfur",
                               "stonefield", "stonefield_near", "river", "river_near")
 LINES = FULL_LINES
@@ -308,14 +309,30 @@ def score_lines(per, size=1024, players=6, params=None, mode="full"):
     return out
 
 
+def line_weights(params=None, mode="full"):
+    """Share of the score per line (sums to 1). Full map mode gives the mountain lines exactly the share they have
+    in lobby preview mode; space and the full-map-only lines (ore, stone, river) split the rest by their weights,
+    so adding those lines takes from space, never from mountain."""
+    P = params_of(params)
+    w = {k: float(P["w_" + k]) for k in lines_for(mode)}
+    tot = sum(w.values())
+    if tot <= 0:
+        return {k: 0.0 for k in w}
+    if mode == "full":
+        m_pre = sum(w[k] for k in MOUNTAIN_LINES)
+        pre = sum(w[k] for k in PREVIEW_LINES)
+        rest = tot - m_pre
+        if pre > 0 and rest > 0:
+            share = m_pre / pre  # mountain's share in lobby preview mode
+            return {k: (share * v / m_pre if k in MOUNTAIN_LINES else (1 - share) * v / rest) for k, v in w.items()}
+    return {k: v / tot for k, v in w.items()}
+
+
 def score_tiles(per, size=1024, players=6, params=None, mode="full"):
     """0-100: weighted average of the score lines. mode "preview" uses only what the lobby preview shows."""
-    P = params_of(params)
-    lines = score_lines(per, size, players, P, mode)
-    tot = sum(P["w_" + k] for k in lines)
-    if tot <= 0:
-        return 0.0
-    return round(100 * sum(P["w_" + k] * v for k, v in lines.items()) / tot, 1)
+    lines = score_lines(per, size, players, params, mode)
+    w = line_weights(params, mode)
+    return round(100 * sum(w[k] * v for k, v in lines.items()), 1)
 
 
 RIVER_RGB = (80, 165, 235)
