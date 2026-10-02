@@ -5,13 +5,20 @@
 In the Settlers 4 lobby, a random map is set by a short key such as `LSGUKDC0`. Most random maps are uneven: one
 player gets little mountain, or is boxed in by water. Finding a good one by hand means loading map after map.
 S4 Map Finder checks thousands of keys for you and keeps the maps where **every** player has enough mountain
-(the most important thing), enough building space, and enough coal and iron. You browse previews of the best maps
-and copy a key straight into the lobby.
+(the most important thing) and enough building space. You browse pictures of the best maps and copy a key straight
+into the lobby.
+
+It has two modes:
+
+- **Lobby preview:** judges a key only by what the game's lobby preview shows (water, land and mountain), the way
+  players have picked keys for years. Fast.
+- **Full map:** generates the whole map and also scores what the preview hides: ore (gold, coal, iron, stone,
+  sulfur), stone fields to quarry, rivers, and snow on the mountains.
 
 **How it does it.** The tool runs the game's own random-map generator, taken from your installed `S4_Main.exe` and
 run in an emulator (Unicorn). So the map you see for a key is exactly the map the lobby will make for it. Each key
-gets a quick check from the small lobby preview first. Only the most promising ones are fully generated, measured
-for every player, and scored. A map is only as good as its **weakest** player, so the score is built from what the
+gets a quick check from the small lobby preview first. In full map mode, only the most promising ones are then
+fully generated, measured for every player, and scored. A map is only as good as its **weakest** player, so the score is built from what the
 weakest player gets.
 
 ![S4 Map Finder: found maps on the left, the selected map's preview and per-player stats on the right](docs/screenshot.png)
@@ -38,7 +45,8 @@ Requirements:
 
 1. Start `S4MapFinder.exe`. The top left should say **✓ Settlers 4 History Edition found**. If it doesn't, set the
    game folder (see [below](#game-folder)).
-2. On the **Search** tab, set the lobby settings you play with (players, map size, land mass, minerals, mirror axis).
+2. On the **Search** tab, pick a [mode](#mode) and set the lobby settings you play with (players, map size, land
+   mass, minerals, mirror axis).
 3. Click **Find new maps**. Maps appear in the middle list as they're found.
 4. Click a map to see a large preview and the stats for each player.
 5. Click **Copy key** (or **Copy** on a card) and paste the key into the random-map key field in the game lobby.
@@ -62,6 +70,16 @@ C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\games\thesettlers4
 
 ## Search tab
 
+### Mode
+
+| Mode | What it uses | Speed |
+| --- | --- | --- |
+| **Lobby preview** | Only what the lobby preview shows: water, land and mountain. Nothing about ore, stone, rivers or snow. Mountain and space are estimated from the 160×160 preview. | Fast: hundreds of keys per minute. |
+| **Full map** | Everything from lobby preview mode, plus what the preview hides: ore, stone fields, rivers and snow, measured tile by tile on the fully generated map. | Each map takes about 15 s to generate; only the best keys from the quick check are generated. |
+
+Each mode keeps its own list of found maps. Switch the mode before you start a search; it can't change while a
+search runs. The Scoring tab greys out the lines a mode doesn't use.
+
 ### Lobby settings
 
 These must match the settings you will choose in the game lobby. Results are kept separately for every combination.
@@ -83,7 +101,7 @@ These must match the settings you will choose in the game lobby. Results are kep
 | **CPU cores** | How many processor cores the search uses. The default leaves one core free so the PC stays usable. |
 
 **Find new maps** starts a search; the same button becomes **Stop**, which you can press at any time. Below it you see
-how many maps are found, how many keys were checked and fully generated, and the elapsed time.
+how many maps are found, how many keys were checked (and, in full map mode, fully generated), and the elapsed time.
 
 A search never shows you a map twice: maps you've been shown are remembered, so every run brings new keys. Good maps
 found in earlier runs that you haven't seen yet are shown first, instantly.
@@ -93,29 +111,37 @@ found in earlier runs that you haven't seen yet are shown first, instantly.
 - **This search / All found maps** (above the list): *This search* lists the maps from the current run. *All found
   maps* lists every map found so far for the current lobby settings, best first, including ones you've seen.
 - **Map cards:** preview, key and score. Click a card to show it on the right; **Copy** copies its key.
-- **Big preview:** drawn like the in-game minimap: a slanted map, red circles for team 1 (P1–P3) and blue for team 2
-  (P4–P6).
-- **Show mines** (top right): off by default, like the lobby preview. Turn it on to see ore on the mountains: dark
-  speckles are coal, red is iron, yellow is gold. It switches the big preview and the thumbnails.
-- **Stats table**, one row per player plus a *weakest* row (the lowest value of each column):
+- **Big picture:** drawn like the in-game minimap: a slanted map, red circles for team 1 (P1–P3) and blue for team 2
+  (P4–P6). In lobby preview mode it shows exactly what the lobby preview shows: water, land, mountain (grey) and
+  desert. In full map mode it is the whole map, with rivers in light blue and stone fields in grey.
+- **Show mines** (top right, full map mode only): off by default, like the lobby preview. Turn it on to see ore on
+  the mountains: dark speckles are coal, red iron, yellow gold, pale yellow sulfur, white stone. It switches the big
+  picture and the thumbnails.
+- **Stats table**, one row per player plus a *weakest* row (the lowest value of each column). Lobby preview mode
+  shows the first five columns; full map mode shows all of them (scroll sideways if the window is narrow):
 
   | Column | Meaning |
   | --- | --- |
-  | Space | Buildable grass tiles in the player's area (flat enough to build on) |
+  | Space | Buildable land tiles in the player's area (in full map mode: grass flat enough to build on) |
   | Space ≤150 | Buildable tiles within the close radius of the castle |
-  | Mountain | Mountain tiles in the player's area, with snow counted at the Scoring tab's snow factor (½ by default) |
+  | Mountain | Mountain tiles in the player's area; in full map mode snow counts at the Scoring tab's snow factor (½ by default) |
   | Mtn ≤150 | The same, within the close radius of the castle |
-  | Snow | Snow tiles in the player's area (no ore under snow) |
   | Fields | Separate mountain patches the player has (a patch shared by teammates counts once) |
-  | Coal, Iron, Gold, Sulfur | Tiles with that ore in the player's area |
+  | Snow | Snow tiles in the player's area (no ore under snow) |
+  | Gold, Coal, Iron, Stone ore, Sulfur | Tiles with that ore in the player's area |
+  | Stones, Stones ≤150 | Stone tiles to quarry (stone fields on the grass), in the area / within the close radius |
+  | River, River ≤150 | River tiles, in the area / within the close radius |
+
+  In lobby preview mode the values are full-map tiles estimated from the small preview, so they are rougher.
 
   "The player's area" is explained under [Player areas](#player-areas). The ≤ number follows the close radius on the
   Scoring tab.
 
 Other buttons on the left:
 
-- **Check a map key:** type or paste any key (8 characters, ending in 0) and press **Check**. It is generated
-  (about 15 s), scored, and shown, which is handy for a key a friend sent you. The key's own lobby settings are used.
+- **Check a map key:** type or paste any key (8 characters, ending in 0) and press **Check**. It is scored in the
+  current mode and shown, which is handy for a key a friend sent you: from its lobby preview in a few seconds, or
+  fully generated in about 15 s. The key's own lobby settings are used.
 - **Open data folder:** opens where the results of the current settings are stored.
 - **Forget seen maps:** makes maps you've already been shown for these settings eligible to be shown again.
 
@@ -126,7 +152,7 @@ one thing (for example mountain) and gives full points if that player reaches th
 then combined using their **weights**.
 
 Changing a target or weight re-scores all found maps immediately, so you can sort your maps by what matters to you.
-Changes also steer the next search: its quick first check of each key follows your mountain and space settings.
+Changes also steer the next search: its quick check of each key uses the lobby preview lines.
 **Reset to defaults** restores the values below, which were calibrated on known-good league maps.
 
 ### Player areas
@@ -135,7 +161,7 @@ Changes also steer the next search: its quick first check of each key follows yo
 | --- | --- | --- |
 | **Wide radius** | 200 tiles | How far from the castle ground counts for a player at all. Everything further away is ignored. |
 | **Close radius** | 150 tiles | Used by the "close" lines and the ≤ columns: only ground within this distance of the castle. Mountain close to home is easier to use and defend. |
-| **Snow** | 0.5 | How much a snow tile counts compared with plain rock, in every mountain line (Mountain, Mountain close, Mountain fairness). Big mountains have snow on top, and there is never ore under snow, so snow is worth less. 0.5 = a snow tile counts half; 0 = snow doesn't count at all; 1 = snow counts like rock. |
+| **Snow** | 0.5 | Full map mode only (the lobby preview doesn't show snow). How much a snow tile counts compared with plain rock, in every mountain line (Mountain, Mountain close, Mountain fairness). Big mountains have snow on top, and there is never ore under snow, so snow is worth less. 0.5 = a snow tile counts half; 0 = snow doesn't count at all; 1 = snow counts like rock. |
 
 Distances are walking distances over land, not straight lines, so water in between makes ground count as further
 away.
@@ -145,18 +171,29 @@ own list. Maps found with each radius setting are kept separately, and switching
 
 ### Score lines
 
+The first six lines use what the lobby preview shows and count in both modes. The others count in full map mode
+only.
+
 | Line | Default target | Default weight | What it measures |
 | --- | --- | --- | --- |
 | **Mountain** | 9,000 tiles | 30 | Mountain tiles in the weakest player's area. Mountain is where mines go, so this matters most. |
 | **Mountain, close** | 5,000 tiles | 15 | Mountain within the close radius of the weakest player's castle. |
-| **Space** | 40,000 tiles | 30 | Buildable grass in the weakest player's area. |
-| **Space, close** | 30,000 tiles | 0 (off) | Buildable grass within the close radius. |
+| **Space** | 40,000 tiles | 30 | Buildable land in the weakest player's area. |
+| **Space, close** | 30,000 tiles | 0 (off) | Buildable land within the close radius. |
 | **Mountain fairness** | 0.6 | 10 | Weakest player's mountain ÷ strongest player's mountain. 0.6 means full points if the weakest player has at least 60 % of what the strongest has. |
 | **Space fairness** | 0.6 | 5 | The same for building space. |
-| **Coal** | 300 tiles | 5 | Coal tiles in the weakest player's area. |
-| **Iron** | 200 tiles | 5 | Iron tiles in the weakest player's area. |
-| **Gold** | 150 tiles | 0 (off) | Gold tiles in the weakest player's area. |
-| **Sulfur** | 120 tiles | 0 (off) | Sulfur tiles in the weakest player's area. |
+| **Gold** | 150 tiles | 6 | *Full map.* Gold tiles in the weakest player's area. Gold counts most of the ores by default. |
+| **Coal** | 800 tiles | 5 | *Full map.* Coal tiles. |
+| **Iron** | 300 tiles | 3 | *Full map.* Iron tiles. |
+| **Stone ore** | 200 tiles | 3 | *Full map.* Stone ore in the mountains (for stone mines). |
+| **Sulfur** | 100 tiles | 1 | *Full map.* Sulfur tiles. |
+| **Stone fields** | 400 tiles | 5 | *Full map.* Stone on the grass for stonecutters, in the weakest player's area. More stone is better. |
+| **Stone fields, close** | 250 tiles | 5 | *Full map.* The same, within the close radius. |
+| **River** | 100 tiles | 3 | *Full map.* River tiles in the weakest player's area (rivers aren't in the lobby preview). |
+| **River, close** | 60 tiles | 2 | *Full map.* River tiles within the close radius. |
+
+The default ore, stone and river targets are about what the weakest player gets on a good map (measured on 120
+random maps).
 
 - **Target:** the amount the weakest player needs for full points on that line. Below the target, points drop in
   proportion (half the target gives half the points); above it there is no bonus.
@@ -169,18 +206,24 @@ own list. Maps found with each radius setting are kept separately, and switching
 Examples:
 
 - *I want lots of mountain near my castle:* raise **Mountain, close** to 8,000 and its weight to 30.
-- *Gold matters for my games:* set the **Gold** weight to 5–10.
+- *Gold matters even more for my games:* raise the **Gold** weight to 10–15.
+- *Ore doesn't matter, only the layout:* use lobby preview mode, or set the ore weights to 0.
 - *I only care that it's fair:* raise both fairness weights and lower the others.
 
 ## How it works
 
-1. **Quick check** (about 1 s per key per core). The tool runs the generator's first step and the 160×160 lobby
-   preview, splits the land between the players, and estimates mountain and space for each. This gives a rough
-   score. (The small preview doesn't show snow, so snow is only taken into account in the next step.)
-2. **Full generation** (about 15 s per map, many in parallel) for the top 3 % of keys by quick check. The full
-   1024×1024 map is generated, every player's area is measured tile by tile, and the map is scored and drawn.
+1. **Quick check** (well under 1 s per key per core). The tool runs the generator's first step and the 160×160
+   lobby preview, splits the land between the players, and estimates mountain and space for each in full-map tiles.
+   This is the lobby preview score. In **lobby preview mode** this is the map's score, and keys at or above the
+   minimum score are shown right away.
+2. **Full generation** (full map mode; about 15 s per map, many in parallel) for the top 3 % of keys by quick check.
+   The full 1024×1024 map is generated, every player's area is measured tile by tile (mountain, snow, ore, stone,
+   rivers), and the map is scored and drawn.
 3. Maps at or above the minimum score are shown. The search keeps checking fresh keys until it has found as many as
-   you asked for. With a minimum score of 95, about half of the fully generated maps pass.
+   you asked for.
+
+The lobby preview score ranks maps almost the same way as the full map score (rank correlation 0.97 on 120 random
+maps), but it can't see ore, stone, rivers or snow, and the preview is a slightly simplified map.
 
 ### Player areas
 
@@ -188,28 +231,27 @@ On a mirrored map the mirror axis is the front line: enemies can't build on your
 axis, and within it every tile goes to the **nearest teammate** (walking over land). A mountain between two teammates
 is split between them, and **no tile counts for two players**. A mountain patch counts as a *field* for the teammate
 who holds most of it, and for a second teammate only if they hold at least 40 % of it. Only mineable mountain (not
-snow) counts toward the size of a field.
+snow) counts toward the size of a field. On maps without a single mirror axis, every tile goes to the nearest castle.
 
 ### Mountain terrain
 
 Ore is only ever found on plain rock. A mountain goes from its foot (next to the grass) over rock up to a snow edge
 and snow on the highest parts; the foot, the snow edge and the snow never have ore. The tool counts the snow edge and
-snow as *snow*. On maps without a single mirror
-axis, every tile goes to the nearest castle.
+snow as *snow*.
 
 ### Calibration
 
 The default score was calibrated on known-good league keys (6 players, 1024, land 90 %, minerals higher, short
 diagonal):
 
-| Key | Score |
-| --- | --- |
-| LSGUKDC0 | 100 |
-| LSG5JJE0 | 99.7 |
-| LSGFG8O0 | 95 |
-| LSG2NBQ0 | 91 |
-| LSGKKUJ0 | 90 |
-| LSG2H840 | 69 (P2/P5 are short on mountain) |
+| Key | Full map | Lobby preview |
+| --- | --- | --- |
+| LSGUKDC0 | 99 | 96 |
+| LSG5JJE0 | 100 | 99 |
+| LSGFG8O0 | 95 | 85 |
+| LSG2NBQ0 | 92 | 90 |
+| LSGKKUJ0 | 89 | 72 |
+| LSG2H840 | 72 (P2/P5 are short on mountain) | 56 |
 
 Typical bad random maps score 20–60.
 
@@ -219,8 +261,8 @@ Everything is in `%LOCALAPPDATA%\S4MapFinder`:
 
 - `config.json`: your settings, including the game folder and scoring parameters.
 - `maps\<players>p_<size>_land<land>_min<minerals>_mirror<mirror>\`: one folder per lobby setting combination, with
-  the found maps (`deep*.json`), checked keys (`scan*.json`), the maps you've been shown (`shown.json`), and the
-  preview images (`img\`).
+  the found maps (`deep*.json` for full map mode, `preview*.json` for lobby preview mode), checked keys
+  (`scan*.json`), the maps you've been shown (`shown.json`, `shown_preview.json`), and the pictures (`img\`).
 
 Delete the folder to start completely fresh.
 
@@ -231,7 +273,7 @@ Delete the folder to start completely fresh.
 | ✗ *S4_Main.exe not found in this folder* | Pick the game folder with **…** (see [Game folder](#game-folder)). |
 | ✗ *Unsupported S4_Main.exe version* | Your game build differs from the one this tool supports. |
 | The search finds maps slowly | Lower the minimum score, use more CPU cores, or relax the Scoring targets. |
-| Something seems broken | Run `S4MapFinder.exe --selftest` from a command prompt. It runs a short search and writes `%LOCALAPPDATA%\S4MapFinder\selftest.log`. |
+| Something seems broken | Run `S4MapFinder.exe --selftest` from a command prompt. It runs a short search in both modes and writes `%LOCALAPPDATA%\S4MapFinder\selftest.log`. |
 
 ---
 
@@ -276,7 +318,7 @@ parameters.
 | File | Purpose |
 | --- | --- |
 | `app.py` | Desktop UI (Tkinter). |
-| `engine.py` | Search engine used by the UI: worker pool, two-stage search, result storage. |
+| `engine.py` | Search engine used by the UI: worker pool, lobby preview and full map search, result storage. |
 | `analyze.py` | Player areas, metrics, scoring, and rendering. |
 | `s4gen.py` | Unicorn emulator for the generator. It stubs the CRT/Win32 functions the generator uses. |
 | `s4key.py` | Map key ↔ settings (base32, least-significant character first: players, minerals, size, mirror, land, 20-bit seed). |

@@ -40,7 +40,7 @@ def stage1(key):
         starts = analyze.player_starts(G)
         pv = np.frombuffer(G.preview(), "<u2").reshape(160, 160)
         per = analyze.evaluate_preview(pv, starts, mirror=s4key.decode(key)["mirror"])
-        return key, analyze.score(per), per
+        return key, analyze.score_tiles(per, mode="preview"), per
     except Exception as e:  # never let one odd seed kill the scan
         return key, -1.0, str(e)
 

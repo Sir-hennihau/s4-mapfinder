@@ -8,14 +8,14 @@ import analyze
 import s4key
 
 SUPPORTED_MD5 = "153c49ab29946c21d50a3ae7a95c5cf8"
-SCORE_VERSION = 4         # bump when the stored per-player metrics change: older maps get regenerated
-PREVIEW_VERSION = 3       # bump when the pre-screen changes: the seed scan starts over
+SCORE_VERSION = 5         # bump when the stored per-player metrics change: older maps get regenerated
+PREVIEW_VERSION = 4       # bump when the pre-screen / preview metrics change: the seed scan starts over
 DEFAULT_GAME_DIRS = [
     r"D:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\games\thesettlers4",
     r"C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\games\thesettlers4",
     r"C:\Program Files\Ubisoft\Ubisoft Game Launcher\games\thesettlers4",
 ]
-PRE_TOP_FRACTION = 0.03   # fully generate seeds whose pre-screen is in the top 3 % seen so far
+PRE_TOP_FRACTION = 0.03   # full-map mode: fully generate seeds whose pre-screen is in the top 3 % seen so far
 BATCH = 480               # seeds per pre-screen batch
 
 
@@ -83,9 +83,11 @@ def _params(key):
 
 
 def stage1(job):
-    key, params = job
+    """Score a seed from the lobby preview only (~0.3 s). Saves the preview picture when the score reaches
+    render_min (None = never). -> key, score, error, per-player metrics, starts"""
+    key, params, img_dir, render_min = job
     if G is None:
-        return key, -1.0, INIT_ERROR
+        return key, -1.0, INIT_ERROR, None, None
     try:
         d = s4key.decode(key)
         P = analyze.params_of(params)
@@ -95,9 +97,13 @@ def stage1(job):
         sc = d["size"] / 1024
         per = analyze.evaluate_preview(pv, starts, size=d["size"], radius_tiles=P["radius"] * sc,
                                        mirror=d["mirror"], near_tiles=P["near"] * sc)
-        return key, analyze.score(per, d["players"], P), None
+        score = analyze.score_tiles(per, d["size"], d["players"], P, mode="preview")
+        if render_min is not None and score >= render_min:
+            analyze.render_preview(pv, starts, d["size"], scale=1024 / d["size"]).save(
+                os.path.join(img_dir, key + "_pv.png"))
+        return key, score, None, per, [list(s) for s in starts]
     except Exception as e:
-        return key, -1.0, f"{type(e).__name__}: {e}"
+        return key, -1.0, f"{type(e).__name__}: {e}", None, None
 
 
 def stage2(job):
@@ -130,10 +136,10 @@ def rank_key(score, per, size=1024, players=6, params=None):
     return (-score, -tie)
 
 
-def rescore(key, per, params=None):
+def rescore(key, per, params=None, mode="full"):
     """Score stored metrics again with other targets/weights (no generation needed)."""
     d = s4key.decode(key)
-    return analyze.score_tiles(per, d["size"], d["players"], params)
+    return analyze.score_tiles(per, d["size"], d["players"], params, mode)
 
 
 def geo(params):
@@ -150,6 +156,12 @@ def _tag(params, keys):
 
 
 # ------------------------------------------------------------------ persistent store
+def image_path(img_dir, key, mode="full", ores=False):
+    if mode == "preview":
+        return os.path.join(img_dir, key + "_pv.png")
+    return os.path.join(img_dir, key + ("_ores" if ores else "") + ".png")
+
+
 def _load(path, default):
     try:
         with open(path) as f:
@@ -165,21 +177,26 @@ def _save(path, obj):
 
 
 class Store:
-    """Everything known for one combination of lobby settings."""
+    """Everything known for one combination of lobby settings, in one mode:
+    "preview" = maps scored from the lobby preview only, "full" = fully generated maps."""
 
-    def __init__(self, root, players, size, land, minerals, mirror, params=None):
+    def __init__(self, root, players, size, land, minerals, mirror, params=None, mode="full"):
         self.settings = dict(players=players, size=size, land=land, minerals=minerals, mirror=mirror)
         self.params = analyze.params_of(params)
+        self.mode = mode
+        self.version = PREVIEW_VERSION if mode == "preview" else SCORE_VERSION
         self.geo = geo(self.params)
         self.dir = self.dir_for(root, players, size, land, minerals, mirror)
         self.img = os.path.join(self.dir, "img")
         os.makedirs(self.img, exist_ok=True)
         # pre-screen scores depend on the pre-screen parameters, per-player metrics on the radii (images don't)
         self.scan_file = os.path.join(self.dir, f"scan_v{PREVIEW_VERSION}{_tag(self.params, analyze.PREVIEW_KEYS)}.json")
-        self.deep_file = os.path.join(self.dir, f"deep{_tag(self.params, analyze.GEO_KEYS)}.json")
+        name = "preview" if mode == "preview" else "deep"
+        self.deep_file = os.path.join(self.dir, f"{name}{_tag(self.params, analyze.GEO_KEYS)}.json")
+        self.shown_file = os.path.join(self.dir, "shown_preview.json" if mode == "preview" else "shown.json")
         self._scan = None                       # key -> pre-screen score (loaded when a search needs it)
-        self.deep = _load(self.deep_file, {})   # key -> {score, players, starts, v, geo}
-        self.shown = set(_load(os.path.join(self.dir, "shown.json"), []))
+        self.deep = _load(self.deep_file, {})   # key -> {score, players, starts, v, geo, mode}
+        self.shown = set(_load(self.shown_file, []))
         self.lock = threading.Lock()
 
     @staticmethod
@@ -196,22 +213,22 @@ class Store:
         return s4key.encode(seed, **self.settings)
 
     def image(self, key, ores=False):
-        return os.path.join(self.img, key + ("_ores" if ores else "") + ".png")
+        return image_path(self.img, key, self.mode, ores)
 
     def current(self, key):
         d = self.deep.get(key)
-        return (d is not None and d.get("v") == SCORE_VERSION and d.get("geo", self.geo) == self.geo
+        return (d is not None and d.get("v") == self.version and d.get("geo", self.geo) == self.geo
                 and os.path.exists(self.image(key)))
 
     def entry(self, key, score, per, starts):
-        return dict(score=score, players=per, starts=starts, v=SCORE_VERSION, geo=self.geo)
+        return dict(score=score, players=per, starts=starts, v=self.version, geo=self.geo, mode=self.mode)
 
     def save(self):
         with self.lock:
             if self._scan is not None:
                 _save(self.scan_file, self._scan)
             _save(self.deep_file, self.deep)
-            _save(os.path.join(self.dir, "shown.json"), sorted(self.shown))
+            _save(self.shown_file, sorted(self.shown))
 
     def found(self, min_score=0):
         """All fully generated maps (best first)."""
@@ -219,7 +236,7 @@ class Store:
         rows = []
         for k, d in list(self.deep.items()):
             if self.current(k):
-                r = dict(d, key=k, score=rescore(k, d["players"], self.params))  # current targets/weights
+                r = dict(d, key=k, score=rescore(k, d["players"], self.params, self.mode))  # current targets/weights
                 if r["score"] >= min_score:
                     rows.append(r)
         rows.sort(key=lambda r: rank_key(r["score"], r["players"], s["size"], s["players"], self.params))
@@ -306,8 +323,10 @@ class Search(threading.Thread):
                             batch.add(k)
                     self._progress(phase="checking seeds")
                     errors = []
-                    for k, sc, err in _results(pool, stage1, [(k, st.params) for k in sorted(batch)],
-                                                  self.stop_event):
+                    preview = st.mode == "preview"  # preview mode: the lobby preview's score is the map's score
+                    render_min = self.min_score if preview else None
+                    for k, sc, err, per, starts in _results(
+                            pool, stage1, [(k, st.params, st.img, render_min) for k in sorted(batch)], self.stop_event):
                         if err:
                             errors.append(err)
                             if self._ok == 0 and len(errors) >= 8:  # nothing ever worked: give up loudly
@@ -317,12 +336,21 @@ class Search(threading.Thread):
                         with st.lock:
                             st.scan[k] = sc
                         self.stats["scanned"] += 1
+                        if preview and sc >= self.min_score:
+                            d = st.entry(k, sc, per, starts)
+                            with st.lock:
+                                st.deep[k] = d
+                            if k not in st.shown:
+                                self._emit(k, d)
                         if self.stats["scanned"] % 16 == 0:
                             self._progress()
-                        if self.stop_event.is_set():
+                        if self.stop_event.is_set() or (preview and self.n_found >= self.want):
                             break
                     if self.stop_event.is_set():
                         break
+                    if preview:
+                        st.save()
+                        continue
                     # 3. fully generate the promising ones
                     vals = np.array([v for v in st.scan.values() if v >= 0])
                     cut = np.quantile(vals, 1 - PRE_TOP_FRACTION) if len(vals) >= 200 else np.inf
@@ -358,16 +386,21 @@ class Search(threading.Thread):
 
 
 class KeyCheck(threading.Thread):
-    """Fully generate + score one key (e.g. typed in by the user)."""
+    """Score one key (e.g. typed in by the user) in the store's mode: from the lobby preview, or fully generated."""
 
     def __init__(self, exe, store, key, events):
         super().__init__(daemon=True)
         self.exe, self.store, self.key, self.events = exe, store, key, events
 
     def run(self):
+        st = self.store
         try:
             with Pool(1, initializer=_init, initargs=(self.exe,)) as pool:
-                k, sc, per, starts = pool.apply(stage2, ((self.key, self.store.img, self.store.params),))
+                if st.mode == "preview":
+                    k, sc, err, per, starts = pool.apply(stage1, ((self.key, st.params, st.img, -1.0),))
+                    per = err if sc < 0 else per
+                else:
+                    k, sc, per, starts = pool.apply(stage2, ((self.key, st.img, st.params),))
             if sc < 0:
                 self.events.put(("checked", dict(key=self.key, error=per)))
                 return
