@@ -21,7 +21,14 @@ gets a quick check from the small lobby preview first. In full map mode, only th
 fully generated, measured for every player, and scored. A map is only as good as its **weakest** player, so the score is built from what the
 weakest player gets.
 
-![S4 Map Finder: found maps on the left, the selected map's preview and per-player stats on the right](docs/screenshot.png)
+**Lobby preview mode:** maps judged by what the lobby preview shows.
+
+![S4 Map Finder in lobby preview mode: found maps in the middle, the selected map's lobby preview and per-player stats on the right](docs/screenshot-preview.png)
+
+**Full map mode** with *Show full details* on: the whole generated map with rivers, stone fields and ore, and stats
+for every resource.
+
+![S4 Map Finder in full map mode: the selected map with rivers, stone fields and ore, and per-player stats for mountain, space, ore, stone and river](docs/screenshot-full.png)
 
 ![](https://img.shields.io/badge/platform-Windows-blue) ![](https://img.shields.io/badge/game-Settlers%204%20History%20Edition-green)
 
