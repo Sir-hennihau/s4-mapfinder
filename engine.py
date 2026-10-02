@@ -8,7 +8,8 @@ import analyze
 import s4key
 
 SUPPORTED_MD5 = "153c49ab29946c21d50a3ae7a95c5cf8"
-SCORE_VERSION = 2         # bump when scoring changes: older results get regenerated
+SCORE_VERSION = 3         # bump when the stored per-player metrics change: older maps get regenerated
+PREVIEW_VERSION = 2       # bump when the pre-screen changes: the seed scan starts over
 DEFAULT_GAME_DIRS = [
     r"D:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\games\thesettlers4",
     r"C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\games\thesettlers4",
@@ -124,6 +125,7 @@ def stage2(job):
 def rank_key(score, per, size=1024, players=6, params=None):
     P = analyze.params_of(params)
     f = analyze.area_factor(size, players)
+    per = [analyze.effective(p, P) for p in per]
     tie = min(p["mtn"] for p in per) / (P["t_mtn"] * f) + min(p["space"] for p in per) / (P["t_space"] * f)
     return (-score, -tie)
 
@@ -173,7 +175,7 @@ class Store:
         self.img = os.path.join(self.dir, "img")
         os.makedirs(self.img, exist_ok=True)
         # pre-screen scores depend on the pre-screen parameters, per-player metrics on the radii (images don't)
-        self.scan_file = os.path.join(self.dir, f"scan_v{SCORE_VERSION}{_tag(self.params, analyze.PREVIEW_KEYS)}.json")
+        self.scan_file = os.path.join(self.dir, f"scan_v{PREVIEW_VERSION}{_tag(self.params, analyze.PREVIEW_KEYS)}.json")
         self.deep_file = os.path.join(self.dir, f"deep{_tag(self.params, analyze.GEO_KEYS)}.json")
         self._scan = None                       # key -> pre-screen score (loaded when a search needs it)
         self.deep = _load(self.deep_file, {})   # key -> {score, players, starts, v, geo}

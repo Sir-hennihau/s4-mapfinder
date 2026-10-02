@@ -103,8 +103,9 @@ found in earlier runs that you haven't seen yet are shown first, instantly.
   | --- | --- |
   | Space | Buildable grass tiles in the player's area (flat enough to build on) |
   | Space ≤150 | Buildable tiles within the close radius of the castle |
-  | Mountain | Mountain tiles in the player's area |
-  | Mtn ≤150 | Mountain tiles within the close radius of the castle |
+  | Mountain | Mountain tiles in the player's area, with snow counted at the Scoring tab's snow factor (½ by default) |
+  | Mtn ≤150 | The same, within the close radius of the castle |
+  | Snow | Snow tiles in the player's area (no ore under snow) |
   | Fields | Separate mountain patches the player has (a patch shared by teammates counts once) |
   | Coal, Iron, Gold, Sulfur | Tiles with that ore in the player's area |
 
@@ -134,11 +135,12 @@ Changes also steer the next search: its quick first check of each key follows yo
 | --- | --- | --- |
 | **Wide radius** | 200 tiles | How far from the castle ground counts for a player at all. Everything further away is ignored. |
 | **Close radius** | 150 tiles | Used by the "close" lines and the ≤ columns: only ground within this distance of the castle. Mountain close to home is easier to use and defend. |
+| **Snow** | 0.5 | How much a snow tile counts compared with plain rock, in every mountain line (Mountain, Mountain close, Mountain fairness). Big mountains have snow on top, and there is never ore under snow, so snow is worth less. 0.5 = a snow tile counts half; 0 = snow doesn't count at all; 1 = snow counts like rock. |
 
 Distances are walking distances over land, not straight lines, so water in between makes ground count as further
 away.
 
-Changing a radius changes the measurements themselves, so maps have to be generated again: a new search starts its
+The snow factor re-scores maps instantly like a target or weight. Changing a radius changes the measurements themselves, so maps have to be generated again: a new search starts its
 own list. Maps found with each radius setting are kept separately, and switching back brings the old list back.
 
 ### Score lines
@@ -174,7 +176,7 @@ Examples:
 
 1. **Quick check** (about 1 s per key per core). The tool runs the generator's first step and the 160×160 lobby
    preview, splits the land between the players, and estimates mountain and space for each. This gives a rough
-   score.
+   score. (The small preview doesn't show snow, so snow is only taken into account in the next step.)
 2. **Full generation** (about 15 s per map, many in parallel) for the top 3 % of keys by quick check. The full
    1024×1024 map is generated, every player's area is measured tile by tile, and the map is scored and drawn.
 3. Maps at or above the minimum score are shown. The search keeps checking fresh keys until it has found as many as
@@ -185,7 +187,14 @@ Examples:
 On a mirrored map the mirror axis is the front line: enemies can't build on your half. Each team gets its side of the
 axis, and within it every tile goes to the **nearest teammate** (walking over land). A mountain between two teammates
 is split between them, and **no tile counts for two players**. A mountain patch counts as a *field* for the teammate
-who holds most of it, and for a second teammate only if they hold at least 40 % of it. On maps without a single mirror
+who holds most of it, and for a second teammate only if they hold at least 40 % of it. Only mineable mountain (not
+snow) counts toward the size of a field.
+
+### Mountain terrain
+
+Ore is only ever found on plain rock. A mountain goes from its foot (next to the grass) over rock up to a snow edge
+and snow on the highest parts; the foot, the snow edge and the snow never have ore. The tool counts the snow edge and
+snow as *snow*. On maps without a single mirror
 axis, every tile goes to the nearest castle.
 
 ### Calibration

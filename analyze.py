@@ -143,7 +143,7 @@ def field_counts(lab, owner, msec, n, min_share):
 # Radii are in tiles and tile targets are for 1024x1024 with 6 players; both are scaled for other settings.
 # t_* = value the weakest player needs for full points on that line, w_* = relative weight of the line.
 DEFAULT_PARAMS = dict(
-    radius=200, near=150,
+    radius=200, near=150, snow=0.5,
     t_mtn=9000, t_mtn_near=5000, t_space=40000, t_space_near=30000, t_fair_mtn=0.6, t_fair_space=0.6,
     t_coal=300, t_iron=200, t_gold=150, t_sulfur=120,
     w_mtn=30, w_mtn_near=15, w_space=30, w_space_near=0, w_fair_mtn=10, w_fair_space=5,
@@ -151,6 +151,7 @@ DEFAULT_PARAMS = dict(
 GEO_KEYS = ("radius", "near")  # change the per-player metrics: maps must be generated again
 PREVIEW_KEYS = ("radius", "t_mtn", "t_space", "w_mtn", "w_mtn_near", "w_space", "w_space_near",
                 "w_fair_mtn", "w_fair_space")  # used by the pre-screen
+# snow = how much a snow tile counts compared with plain rock (snow never has ore under it)
 LINES = ("mtn", "mtn_near", "space", "space_near", "fair_mtn", "fair_space", "coal", "iron", "gold", "sulfur")
 
 
@@ -203,7 +204,8 @@ def score(per, players=6, params=None):
 
 # ---------------------------------------------------------------- full-map (tile) analysis
 GRASS = (16, 17, 20, 24, 25)
-MOUNTAIN_T = (32, 33, 35, 128, 129)
+MOUNTAIN_T = (32, 33, 35, 128, 129)  # foot (33), rock (32, the only type with ore), snow edge (35), snow
+SNOW_T = (35, 128, 129)
 ORES = {1: "coal", 2: "iron", 3: "gold", 4: "sulfur", 5: "stone"}
 BLK = 4  # analysis block size in tiles
 
@@ -217,6 +219,7 @@ def evaluate_tiles(A, B, starts, radius=200, near=150, mirror=None):
         slope = np.maximum(slope, np.abs(h - np.roll(np.roll(h, dy, 0), dx, 1)))
     water = t < 16
     mtn = np.isin(t, MOUNTAIN_T)
+    snow = np.isin(t, SNOW_T)
     build = np.isin(t, GRASS) & (slope <= 6)
     ore = B[:, :, 3] >> 4
     ore_ok = ((B[:, :, 3] & 15) > 0) & ~water
@@ -224,25 +227,36 @@ def evaluate_tiles(A, B, starts, radius=200, near=150, mirror=None):
     blk = lambda a: a.reshape(m, BLK, m, BLK).sum((1, 3))
     water_b = blk(water) > BLK * BLK // 2
     owner, d1, _ = partition(~water_b, starts, BLK, radius // BLK, mirror, n)
-    mtn_b = blk(mtn); build_b = blk(build)
+    mtn_b = blk(mtn); build_b = blk(build); snow_b = blk(snow)
     ore_b = {k: blk((ore == k) & ore_ok) for k in ORES}
     lab, _ = blobs(mtn_b >= BLK * BLK // 2)
-    fields = field_counts(lab, owner, mtn_b, len(starts), 200)  # a field = >= ~200 mountain tiles
+    fields = field_counts(lab, owner, mtn_b - snow_b, len(starts), 200)  # a field = >= ~200 mineable tiles
     res = []
     for i in range(len(starts)):
         mine = owner == i
         close = mine & (d1 <= near)
         r = dict(space=int(build_b[mine].sum()), space_near=int(build_b[close].sum()),
-                 mtn=int(mtn_b[mine].sum()), mtn_near=int(mtn_b[close].sum()), fields=fields[i])
+                 mtn=int(mtn_b[mine].sum()), mtn_near=int(mtn_b[close].sum()), fields=fields[i],
+                 snow=int(snow_b[mine].sum()), snow_near=int(snow_b[close].sum()))
         for k, name in ORES.items():
             r[name] = int(ore_b[k][mine].sum())
         res.append(r)
     return res
 
 
+def effective(p, params=None):
+    """Per-player metrics with snow mountain weighted by the 'snow' parameter (stored metrics are raw counts)."""
+    k = 1 - params_of(params)["snow"]
+    q = dict(p)
+    q["mtn"] = p["mtn"] - k * p.get("snow", 0)
+    q["mtn_near"] = p["mtn_near"] - k * p.get("snow_near", 0)
+    return q
+
+
 def score_lines(per, size=1024, players=6, params=None):
     """-> {line: fraction 0..1 of its target reached by the weakest player}"""
     P = params_of(params)
+    per = [effective(p, P) for p in per]
     f = area_factor(size, players)
     g = lambda k: np.array([p.get(k, 0) for p in per], float)
     c = lambda v: float(np.clip(v, 0, 1))

@@ -19,7 +19,7 @@ LANDS = [f"{v}%" for v in range(10, 100, 10)]
 MINERALS = {"Lower": 5, "Normal": 10, "Higher": 15}
 MIRRORS = {"None": 0, "Short diagonal": 1, "Long diagonal": 2, "Short and long diagonals": 3}
 STAT_COLS = [("space", "Space"), ("space_near", "Space ≤{near}"), ("mtn", "Mountain"), ("mtn_near", "Mtn ≤{near}"),
-             ("fields", "Fields"), ("coal", "Coal"), ("iron", "Iron"), ("gold", "Gold"), ("sulfur", "Sulfur")]
+             ("snow", "Snow"), ("fields", "Fields"), ("coal", "Coal"), ("iron", "Iron"), ("gold", "Gold"), ("sulfur", "Sulfur")]
 # score lines on the Scoring tab: (line, label, spinbox increment for the target)
 SCORE_ROWS = [("mtn", "Mountain", 500), ("mtn_near", "Mountain, close", 500), ("space", "Space", 1000),
               ("space_near", "Space, close", 1000), ("fair_mtn", "Mountain fairness", 0.05),
@@ -190,7 +190,8 @@ class App:
         self.tree.grid(row=3, column=0, sticky="ew")
         legend = ttk.Label(det, style="Muted.TLabel", justify="left", text=(
             "A player's area is their side of the mirror axis, shared with teammates by distance (each tile counts "
-            "for one player), up to the wide radius. Space = buildable grass there, Mountain = mountain tiles, "
+            "for one player), up to the wide radius. Space = buildable grass there, Mountain = mountain tiles (snow counted "
+            "by the Scoring tab's snow factor, as it has no ore), Snow = snow tiles, "
             "“≤ n” = only within n tiles of the castle, Fields = separate mountain patches (a shared patch counts "
             "once). Ore = mineable tiles. Picture: red P1–P3 / blue P4–P6 are the two mirror sides; with "
             "“Show mines”, dark/red/yellow speckles on mountains = coal/iron/gold."))
@@ -226,6 +227,10 @@ class App:
             ttk.Spinbox(ar, from_=20, to=600, increment=10, textvariable=self.v_par[k], width=7).grid(
                 row=i, column=1, sticky="w", padx=(8, 4), pady=2)
             ttk.Label(ar, text="tiles from the castle", style="Muted.TLabel").grid(row=i, column=2, sticky="w")
+        ttk.Label(ar, text="Snow").grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Spinbox(ar, from_=0, to=1, increment=0.1, textvariable=self.v_par["snow"], width=7).grid(
+            row=2, column=1, sticky="w", padx=(8, 4), pady=2)
+        ttk.Label(ar, text="× rock (no ore)", style="Muted.TLabel").grid(row=2, column=2, sticky="w")
 
         sc = ttk.LabelFrame(tab, text="Score lines", padding=10); sc.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         for j, t in enumerate(("", "Target", "Weight")):
@@ -261,6 +266,8 @@ class App:
                 raise ValueError("Values can't be negative")
         if not 20 <= out["radius"] <= 600:
             raise ValueError("Wide radius must be between 20 and 600 tiles")
+        if out["snow"] > 1:
+            raise ValueError("Snow must be between 0 and 1 (1 = as good as rock)")
         if not 10 <= out["near"] <= out["radius"]:
             raise ValueError("Close radius must be between 10 tiles and the wide radius")
         if not any(out["w_" + k] > 0 for k in analyze.LINES):
@@ -521,12 +528,13 @@ class App:
         self._load_big(r["key"])
         self._headings(r.get("geo", engine.geo(None))["near"])
         self.tree.delete(*self.tree.get_children())
-        per = r["players"]; half = len(per) // 2
+        # mountain columns as scored: snow weighted by the Scoring tab's snow factor
+        per = [analyze.effective(p, self._valid_params()) for p in r["players"]]; half = len(per) // 2
         for i, p in enumerate(per):
-            self.tree.insert("", "end", text=f"P{i + 1}", values=[f"{p.get(k, 0):,}" for k, _ in STAT_COLS],
+            self.tree.insert("", "end", text=f"P{i + 1}", values=[f"{round(p.get(k, 0)):,}" for k, _ in STAT_COLS],
                              tags=("t1" if i < half else "t2",))
         mins = {k: min(p.get(k, 0) for p in per) for k, _ in STAT_COLS}
-        self.tree.insert("", "end", text="weakest", values=[f"{mins[k]:,}" for k, _ in STAT_COLS])
+        self.tree.insert("", "end", text="weakest", values=[f"{round(mins[k]):,}" for k, _ in STAT_COLS])
 
     def _headings(self, near):
         for k, t in STAT_COLS:
