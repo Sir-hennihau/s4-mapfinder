@@ -1,0 +1,314 @@
+"""Fast map evaluation from the game's 160x160 lobby preview + Init player starts."""
+import struct
+from collections import deque
+import numpy as np
+
+PV = 160
+WATER = {0x45}
+MOUNTAIN = {0x1083: 1.0, 0x8a2: 1.0, 0x901: 0.5, 0xcc2: 0.5, 0x540: 0.4, 0x864: 0.5}
+DESERT = {0x3100, 0x1940, 0x2520, 0xd60}
+# hex-grid neighbours of S4 tile coordinates
+NB = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1))
+
+
+def player_starts(g):
+    arr = g.u32(0x146B0D4)
+    out = []
+    for i in range(8):
+        o = g.u32(arr + 4 * i)
+        if not o:
+            break
+        out.append(struct.unpack("<2i", g.uc.mem_read(o + 8, 8)))
+    return out
+
+
+def classify(pv):
+    pv = np.asarray(pv).reshape(PV, PV)
+    water = np.isin(pv, list(WATER))
+    mtn = np.zeros(pv.shape, float)
+    for c, w in MOUNTAIN.items():
+        mtn[pv == c] = w
+    desert = np.isin(pv, list(DESERT))
+    build = ~water & (mtn == 0) & ~desert
+    return water, mtn, build
+
+
+def territories(passable, starts, scale, rmax):
+    """Multi-source BFS (hex neighbourhood) -> owner index and distance per cell."""
+    h, w = passable.shape
+    owner = np.full((h, w), -1, np.int8)
+    dist = np.full((h, w), 1 << 20, np.int32)
+    q = deque()
+    for i, (x, y) in enumerate(starts):
+        cx, cy = min(w - 1, int(x / scale)), min(h - 1, int(y / scale))
+        owner[cy, cx] = i; dist[cy, cx] = 0; q.append((cx, cy))
+    while q:
+        x, y = q.popleft()
+        d = dist[y, x] + 1
+        if d > rmax:
+            continue
+        for dx, dy in NB:
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < w and 0 <= ny < h and passable[ny, nx] and dist[ny, nx] > d:
+                dist[ny, nx] = d; owner[ny, nx] = owner[y, x]; q.append((nx, ny))
+    return owner, dist
+
+
+def blobs(mask):
+    """Connected components (hex neighbourhood) -> label array, count."""
+    lab = np.zeros(mask.shape, np.int32)
+    n = 0
+    h, w = mask.shape
+    for sy, sx in zip(*np.nonzero(mask)):
+        if lab[sy, sx]:
+            continue
+        n += 1; lab[sy, sx] = n; st = [(sx, sy)]
+        while st:
+            x, y = st.pop()
+            for dx, dy in NB:
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < w and 0 <= ny < h and mask[ny, nx] and not lab[ny, nx]:
+                    lab[ny, nx] = n; st.append((nx, ny))
+    return lab, n
+
+
+# --- who owns which ground -------------------------------------------------------
+# On mirrored maps the mirror axis is the front line: enemies can't build on your half. Inside a team's
+# half, ground goes to the closest teammate by land (a mountain between teammates is split fairly).
+SPLIT_SHARE = 0.4      # a mountain counts as a field for a 2nd teammate only if they hold >= 40 % of it
+
+
+def _mirror_fn(mirror, n):
+    """(side function f(x, y) -> signed value, point mirror m(x, y)) for a mirror mode, else None."""
+    if mirror == 1:   # short diagonal: (x, y) <-> (y, x)
+        return (lambda x, y: y - x), (lambda x, y: (y, x))
+    if mirror == 2:   # long diagonal: (x, y) <-> (n-1-y, n-1-x)
+        return (lambda x, y: (n - 1) - x - y), (lambda x, y: (n - 1 - y, n - 1 - x))
+    return None
+
+
+def team_sides(starts, mirror, n):
+    """Team id (0/1) per player from the mirror axis, or None when the map has no single axis."""
+    fm = _mirror_fn(mirror, n)
+    if fm is None or len(starts) < 2:
+        return None
+    f, m = fm
+    for x, y in starts:  # every castle must have a mirrored partner, on the other side
+        mx, my = m(x, y)
+        if min(abs(mx - a) + abs(my - b) for a, b in starts) > 8 or f(x, y) == 0:
+            return None
+    return [int(f(x, y) < 0) for x, y in starts]
+
+
+def partition(passable, starts, scale, rmax, mirror=None, n_tiles=1024):
+    """-> owner (-1 = nobody/enemy half unreachable), distance to own castle (tiles), team per player."""
+    sides = team_sides(starts, mirror, n_tiles)
+    if sides is None:  # no mirror axis: plain nearest-castle split, teams = P1..P3 vs P4..P6
+        owner, dist = territories(passable, starts, scale, rmax)
+        return owner, dist.astype(float) * scale, [int(i >= len(starts) // 2) for i in range(len(starts))]
+    f, _ = _mirror_fn(mirror, n_tiles)
+    h, w = passable.shape
+    cy, cx = np.mgrid[0:h, 0:w]
+    side_of_cell = (f((cx + 0.5) * scale, (cy + 0.5) * scale) < 0).astype(int)
+    owner = np.full((h, w), -1, np.int8)
+    dist = np.full((h, w), np.inf)
+    for t in (0, 1):
+        members = [i for i, s in enumerate(sides) if s == t]
+        o, d = territories(passable & (side_of_cell == t), [starts[i] for i in members], scale, rmax)
+        sel = (o >= 0) & (side_of_cell == t)
+        owner[sel] = np.array(members, np.int8)[o[sel]]
+        dist[sel] = d[sel] * scale
+    return owner, dist, sides
+
+
+def field_counts(lab, owner, msec, n, min_share):
+    """Mountain patches per player, without double counting: a patch counts for the player holding the
+    largest share of it (if >= min_share); another player counts it too only when the patch is genuinely
+    split (they hold >= SPLIT_SHARE of it and >= min_share)."""
+    fields = [0] * n
+    for b in range(1, int(lab.max()) + 1):
+        sel = lab == b
+        shares = np.array([msec[sel & (owner == i)].sum() for i in range(n)])
+        tot = shares.sum()
+        if tot <= 0:
+            continue
+        best = int(shares.argmax())
+        for i in range(n):
+            if shares[i] >= min_share and (i == best or shares[i] >= SPLIT_SHARE * tot):
+                fields[i] += 1
+    return fields
+
+
+# --- score parameters (editable in the app) ------------------------------------------
+# Radii are in tiles and tile targets are for 1024x1024 with 6 players; both are scaled for other settings.
+# t_* = value the weakest player needs for full points on that line, w_* = relative weight of the line.
+DEFAULT_PARAMS = dict(
+    radius=200, near=150,
+    t_mtn=9000, t_mtn_near=5000, t_space=40000, t_space_near=30000, t_fair_mtn=0.6, t_fair_space=0.6,
+    t_coal=300, t_iron=200, t_gold=150, t_sulfur=120,
+    w_mtn=30, w_mtn_near=15, w_space=30, w_space_near=0, w_fair_mtn=10, w_fair_space=5,
+    w_coal=5, w_iron=5, w_gold=0, w_sulfur=0)
+GEO_KEYS = ("radius", "near")  # change the per-player metrics: maps must be generated again
+PREVIEW_KEYS = ("radius", "t_mtn", "t_space", "w_mtn", "w_mtn_near", "w_space", "w_space_near",
+                "w_fair_mtn", "w_fair_space")  # used by the pre-screen
+LINES = ("mtn", "mtn_near", "space", "space_near", "fair_mtn", "fair_space", "coal", "iron", "gold", "sulfur")
+
+
+def params_of(p=None):
+    out = dict(DEFAULT_PARAMS)
+    for k, v in (p or {}).items():
+        if k in DEFAULT_PARAMS:
+            v = float(v)
+            out[k] = int(v) if v.is_integer() else v  # 200.0 and 200 must hash alike
+    return out
+
+
+def evaluate_preview(pv, starts, size=1024, radius_tiles=200, mirror=None, near_tiles=130):
+    """Per-player metrics. Units: 'cells' are preview pixels (~6.4x6.4 tiles)."""
+    scale = size / PV
+    water, mtn, build = classify(pv)
+    owner, d1, _ = partition(~water, starts, scale, int(radius_tiles / scale), mirror, size)
+    lab, _ = blobs(mtn > 0)
+    fields = field_counts(lab, owner, mtn, len(starts), 4)
+    res = []
+    for i in range(len(starts)):
+        mine = owner == i
+        res.append(dict(space=int((mine & build).sum()), mtn=round(float(mtn[mine].sum()), 1),
+                        mtn_near=round(float(mtn[mine & (d1 <= near_tiles)].sum()), 1), fields=fields[i]))
+    return res
+
+
+def area_factor(size=1024, players=6):
+    """Thresholds were calibrated on 1024x1024 with 6 players; scale by land area per player."""
+    return (size / 1024) ** 2 * 6 / max(players, 1)
+
+
+def score(per, players=6, params=None):
+    P = params_of(params)
+    k = 6 / max(players, 1)  # preview is always 160x160, so only the player count matters
+    sp = np.array([p["space"] for p in per], float)
+    mt = np.array([p["mtn"] for p in per], float)
+    fl = np.array([p["fields"] for p in per], float)
+    # the weakest player decides whether a map is playable; mountain weighs most.
+    # Preview targets/weights follow the full score's (the defaults give the calibrated 60 / 450 / .40 .25 .15).
+    s_m = min(mt.min() / (60.0 * k * P["t_mtn"] / 9000), 1.5)
+    s_f = min(fl.min() / 4.0, 1.25)
+    s_s = min(sp.min() / (450.0 * k * P["t_space"] / 40000), 1.25)
+    fair = mt.min() / max(mt.max(), 1)
+    wm = 0.40 * (P["w_mtn"] + P["w_mtn_near"]) / 45
+    ws = 0.25 * (P["w_space"] + P["w_space_near"]) / 30
+    wf = 0.15 * (P["w_fair_mtn"] + P["w_fair_space"]) / 15
+    return round(100 * (wm * s_m + 0.20 * s_f + ws * s_s + wf * fair) / (wm + ws + wf + 0.20), 1)
+
+
+# ---------------------------------------------------------------- full-map (tile) analysis
+GRASS = (16, 17, 20, 24, 25)
+MOUNTAIN_T = (32, 33, 35, 128, 129)
+ORES = {1: "coal", 2: "iron", 3: "gold", 4: "sulfur", 5: "stone"}
+BLK = 4  # analysis block size in tiles
+
+
+def evaluate_tiles(A, B, starts, radius=200, near=150, mirror=None):
+    """A,B: (n,n,4) uint8 layers. Returns per-player metrics in tiles (each tile counted for one player)."""
+    n = A.shape[0]
+    t = A[:, :, 1]; h = A[:, :, 0].astype(np.int16)
+    slope = np.zeros_like(h)
+    for dx, dy in ((1, 0), (0, 1), (1, 1)):
+        slope = np.maximum(slope, np.abs(h - np.roll(np.roll(h, dy, 0), dx, 1)))
+    water = t < 16
+    mtn = np.isin(t, MOUNTAIN_T)
+    build = np.isin(t, GRASS) & (slope <= 6)
+    ore = B[:, :, 3] >> 4
+    ore_ok = ((B[:, :, 3] & 15) > 0) & ~water
+    m = n // BLK
+    blk = lambda a: a.reshape(m, BLK, m, BLK).sum((1, 3))
+    water_b = blk(water) > BLK * BLK // 2
+    owner, d1, _ = partition(~water_b, starts, BLK, radius // BLK, mirror, n)
+    mtn_b = blk(mtn); build_b = blk(build)
+    ore_b = {k: blk((ore == k) & ore_ok) for k in ORES}
+    lab, _ = blobs(mtn_b >= BLK * BLK // 2)
+    fields = field_counts(lab, owner, mtn_b, len(starts), 200)  # a field = >= ~200 mountain tiles
+    res = []
+    for i in range(len(starts)):
+        mine = owner == i
+        close = mine & (d1 <= near)
+        r = dict(space=int(build_b[mine].sum()), space_near=int(build_b[close].sum()),
+                 mtn=int(mtn_b[mine].sum()), mtn_near=int(mtn_b[close].sum()), fields=fields[i])
+        for k, name in ORES.items():
+            r[name] = int(ore_b[k][mine].sum())
+        res.append(r)
+    return res
+
+
+def score_lines(per, size=1024, players=6, params=None):
+    """-> {line: fraction 0..1 of its target reached by the weakest player}"""
+    P = params_of(params)
+    f = area_factor(size, players)
+    g = lambda k: np.array([p.get(k, 0) for p in per], float)
+    c = lambda v: float(np.clip(v, 0, 1))
+    out = {}
+    for line in LINES:
+        t = max(P["t_" + line], 1e-9)
+        if line.startswith("fair_"):
+            v = g(line[5:])
+            out[line] = c(v.min() / max(v.max(), 1) / t)
+        else:
+            out[line] = c(g(line).min() / (t * f))
+    return out
+
+
+def score_tiles(per, size=1024, players=6, params=None):
+    P = params_of(params)
+    lines = score_lines(per, size, players, P)
+    tot = sum(P["w_" + k] for k in LINES)
+    if tot <= 0:
+        return 0.0
+    return round(100 * sum(P["w_" + k] * v for k, v in lines.items()) / tot, 1)
+
+
+def render(A, B, starts, scale=0.5, shear=True, ores=True):
+    """In-game-like picture. Returns a PIL image."""
+    from PIL import Image, ImageDraw, ImageFont
+    n = A.shape[0]
+    t = A[:, :, 1]; h = A[:, :, 0].astype(float)
+    pal = np.zeros((256, 3), np.uint8); pal[:] = (90, 150, 60)
+    for i in range(16):
+        pal[i] = (20 + min(i, 7) * 4, 50 + min(i, 7) * 8, 120 + min(i, 7) * 12)
+    pal[16] = (70, 140, 50); pal[17] = (100, 130, 75); pal[20] = (150, 150, 70)
+    pal[24] = (50, 110, 40); pal[25] = (60, 125, 45)
+    pal[32] = (120, 115, 110); pal[33] = (140, 130, 105); pal[35] = (200, 200, 205)
+    pal[48] = (210, 200, 140); pal[64] = (220, 190, 110); pal[65] = (180, 170, 90)
+    pal[96:100] = (60, 90, 60); pal[128] = (240, 240, 250); pal[129] = (190, 190, 200)
+    img = pal[t].astype(float)
+    gx = np.gradient(h, axis=1); gy = np.gradient(h, axis=0)
+    img *= np.clip(1 + 0.04 * (gx + gy), 0.6, 1.4)[:, :, None]
+    if ores:
+        ore = B[:, :, 3] >> 4; amt = B[:, :, 3] & 15
+        on = (amt > 0) & np.isin(t, MOUNTAIN_T)
+        col = {1: (40, 40, 40), 2: (190, 90, 60), 3: (250, 210, 40), 4: (230, 230, 90)}
+        for k, c in col.items():
+            sel = on & (ore == k)
+            img[sel] = img[sel] * 0.45 + np.array(c) * 0.55
+    img = np.clip(img, 0, 255).astype(np.uint8)
+    H = int(n * scale)
+    W = int(n * scale * (1.5 if shear else 1))
+    oy, ox = np.mgrid[0:H, 0:W]
+    y = (oy / scale).astype(int)
+    x = (ox / scale - ((n - y) / 2 if shear else 0)).astype(int)
+    ok = (x >= 0) & (x < n)
+    out = np.full((H, W, 3), 18, np.uint8)
+    out[ok] = img[y[ok], x[ok]]
+    im = Image.fromarray(out)
+    d = ImageDraw.Draw(im)
+    try:
+        font = ImageFont.truetype("arialbd.ttf", max(12, int(28 * scale)))
+    except OSError:
+        font = ImageFont.load_default()
+    team_col = [(220, 40, 40), (40, 90, 230)]
+    half = len(starts) // 2
+    for i, (sx, sy) in enumerate(starts):
+        px = (sx + ((n - sy) / 2 if shear else 0)) * scale; py = sy * scale
+        r = max(9, int(22 * scale))
+        d.ellipse((px - r, py - r, px + r, py + r), fill=team_col[i >= half], outline=(255, 255, 255), width=2)
+        d.text((px, py), str(i + 1), fill=(255, 255, 255), font=font, anchor="mm")
+    return im

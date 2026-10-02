@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Build output (the exe is published as a GitHub release, not committed)
+dist/
+build/
+*.spec
+
+# Local results and dev scratch (map dumps, screenshots, logs)
+results/
+_scratch/
+*.log
+
+# Game files must never be committed
+*.exe
+*.dll
+*.map
+*.bin
+*.npy
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
