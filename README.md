@@ -14,6 +14,8 @@ gets a quick check from the small lobby preview first. Only the most promising o
 for every player, and scored. A map is only as good as its **weakest** player, so the score is built from what the
 weakest player gets.
 
+![S4 Map Finder: found maps on the left, the selected map's preview and per-player stats on the right](docs/screenshot.png)
+
 ![](https://img.shields.io/badge/platform-Windows-blue) ![](https://img.shields.io/badge/game-Settlers%204%20History%20Edition-green)
 
 ---
