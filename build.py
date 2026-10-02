@@ -1,4 +1,4 @@
-"""Build dist/S4MapFinder.exe.
+"""Build dist/S4MapFinder.exe (python build.py [--dist other_folder], e.g. while the old exe is running).
 
 PyInstaller's bootloader is compiled with Control Flow Guard. Unicorn runs JIT-compiled code, which CFG
 rejects (the workers die with an access violation inside Unicorn), so the CFG flag is cleared after the build.
@@ -6,7 +6,8 @@ rejects (the workers die with an access violation inside Unicorn), so the CFG fl
 import os, struct, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXE = os.path.join(HERE, "dist", "S4MapFinder.exe")
+DIST = sys.argv[sys.argv.index("--dist") + 1] if "--dist" in sys.argv else os.path.join(HERE, "dist")
+EXE = os.path.join(DIST, "S4MapFinder.exe")
 IMAGE_DLLCHARACTERISTICS_GUARD_CF = 0x4000
 
 
@@ -27,7 +28,7 @@ def main():
         "--name", "S4MapFinder", "--icon", icon, "--add-data", f"{icon};.",
         "--collect-all", "unicorn", "--hidden-import", "pefile",
         "--exclude-module", "matplotlib", "--exclude-module", "scipy",
-        "--distpath", os.path.join(HERE, "dist"), "--workpath", os.path.join(HERE, "_scratch", "build"),
+        "--distpath", DIST, "--workpath", os.path.join(HERE, "_scratch", "build"),
         "--specpath", os.path.join(HERE, "_scratch", "build"), os.path.join(HERE, "app.py")])
     for attempt in range(12):  # a virus scanner often holds the fresh exe open for a few seconds
         try:
