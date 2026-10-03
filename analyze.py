@@ -458,6 +458,23 @@ RADIUS_RGB = [((255, 130, 130), (200, 20, 20)), ((130, 170, 255), (20, 60, 210))
 RADIUS_FILL, RADIUS_LINE = 0.09, 0.25
 
 
+MOUNTAIN_DARKEN = 0.75  # mountain grey is about as bright as grass: shown this much darker
+
+
+def mountain_contrast(im):
+    """The picture with grey mountain rock darkened, so it stands out from the grass. Applied when a stored picture
+    is shown or exported (works at any size, and on pictures stored before), not when it is drawn. Only greys of
+    medium brightness change: grass, water, desert, forest and markers are coloured or white, and snow, stone fields
+    and the dark background are brighter or darker than rock."""
+    from PIL import Image
+    a = np.asarray(im.convert("RGB"), float)
+    hi, lo = a.max(axis=2), a.min(axis=2)
+    grey = np.clip((0.3 - (hi - lo) / np.maximum(hi, 1)) / 0.15, 0, 1)  # rock 1, mountain foot 1/3, grass 0
+    mid = np.clip((178 - hi) / 18, 0, 1) * np.clip((hi - 50) / 15, 0, 1)  # not snow / stone fields / background
+    f = 1 - (1 - MOUNTAIN_DARKEN) * grey * mid
+    return Image.fromarray(np.clip(a * f[:, :, None], 0, 255).astype(np.uint8))
+
+
 def _grow(mask, r):
     out = mask.copy()
     for dy in range(-r, r + 1):

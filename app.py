@@ -1,5 +1,5 @@
 """S4 Map Finder — desktop UI."""
-import json, multiprocessing, os, queue, sys, time
+import json, math, multiprocessing, os, queue, sys, time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, font as tkfont
 
@@ -7,12 +7,14 @@ from PIL import Image, ImageTk
 
 import analyze
 import engine
+import export
 import s4key
 
 APP = "S4 Map Finder"
 HOME = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "S4MapFinder")
 CONFIG = os.path.join(HOME, "config.json")
 DATA = os.path.join(HOME, "maps")
+EXPORTS = os.path.join(HOME, "discord")
 
 SIZES = [str(256 + 64 * i) for i in range(13)]
 LANDS = [f"{v}%" for v in range(10, 100, 10)]
@@ -266,6 +268,17 @@ class App:
         self.b_copy_all.pack(side="left")
         self.b_undo = ttk.Button(bar, text="Undo dismiss", command=self._undo_dismiss, state="disabled")
         self.b_undo.pack(side="left", padx=(6, 0))
+        dc = ttk.Frame(mid); dc.pack(side="bottom", fill="x", pady=(6, 0), before=bar)
+        # Discord map vote: each button works from the list as it is now (making the pictures again if it changed)
+        ttk.Label(dc, text="Discord:").pack(side="left")
+        self.b_msg = ttk.Button(dc, text="Copy vote message", command=self._copy_message, state="disabled")
+        self.b_msg.pack(side="left", padx=(6, 0))
+        self.b_pic = ttk.Button(dc, text="Copy picture", command=self._copy_picture, state="disabled")
+        self.b_pic.pack(side="left", padx=(6, 0))
+        ttk.Button(dc, text="Open folder", command=self._open_exports).pack(side="left", padx=(6, 0))
+        # the last export: folder, msg, pics, next (picture to copy), sig (what it shows), msg_copied, msg_stale
+        # (a message from an earlier list was copied: its numbers are off)
+        self.exported = None
         self.undo = []  # (store, row) of dismissed maps, last first out
         wrap = ttk.Frame(mid); wrap.pack(fill="both", expand=True, pady=(6, 0))
         self.lc = tk.Canvas(wrap, width=self.thumb[0] * 2 + int(40 * self.k), highlightthickness=0, bg="#f3f3f3")
@@ -292,7 +305,8 @@ class App:
         self.c_details.pack(side="right")
         # wide / close radius around every castle, to see what the Scoring tab's radii take in
         self.v_radii = tk.BooleanVar(value=c.get("show_radii", True))
-        ttk.Checkbutton(hdr, text="Show radii", variable=self.v_radii, command=self._show_big).pack(side="right", padx=12)
+        ttk.Checkbutton(hdr, text="Show radii", variable=self.v_radii,
+                        command=lambda: (self._show_big(), self._pic_button())).pack(side="right", padx=12)
         self.l_info = ttk.Label(det, text="", style="Muted.TLabel"); self.l_info.grid(row=1, column=0, sticky="w")
         self.big = tk.Label(det, bg="#121212", text="Press “Find new maps” to start.", fg="#aaa", font=("Segoe UI", 12))
         self.big.grid(row=2, column=0, sticky="nsew", pady=8)
@@ -672,6 +686,8 @@ class App:
         n = len(self.rows)
         self.l_count.configure(text=f"{n} maps" if n else "")
         self.b_copy_all.configure(state="normal" if n else "disabled")
+        self.b_msg.configure(state="normal" if n else "disabled")
+        self._pic_button()
         return n
 
     def _dismiss(self, r):
@@ -705,6 +721,78 @@ class App:
         self.root.clipboard_clear(); self.root.clipboard_append("\n".join(keys)); self.root.update()
         self.l_status_flash(f"Copied {len(keys)} map keys, one per line.")
 
+    def _export(self):
+        """Make sure the last Discord export shows the listed maps as they are now (numbered in list order, drawn
+        as in the app: Show full details, Show radii), else export them again. False if there's nothing to export."""
+        if not self.rows:
+            return False
+        if self._export_current():
+            return True
+        rows = list(self.rows)
+        mode = rows[0].get("mode", "full")
+        det = self.v_details.get() and mode == "full"
+        radii = (lambda r: engine.row_geo(r)) if self.v_radii.get() else (lambda r: None)
+        self.l_status_flash(f"Making the pictures of {len(rows)} maps …"); self.root.config(cursor="watch")
+        self.root.update()
+        try:
+            out, msg, pics = export.export(rows, lambda r: self._image_path(r["key"], mode, det), EXPORTS, MODES[mode], radii)
+        except OSError as e:
+            messagebox.showerror(APP, f"Could not export the maps: {e}"); return False
+        finally:
+            self.root.config(cursor="")
+        old = self.exported
+        self.exported = dict(folder=out, msg=msg, pics=pics, next=0, sig=self._export_sig(),
+                             msg_copied=False, msg_stale=bool(old and (old["msg_copied"] or old["msg_stale"])))
+        return True
+
+    def _export_sig(self):
+        """What an export shows: the listed maps in order (their vote numbers) and how they're drawn."""
+        return [r["key"] for r in self.rows], self.v_details.get(), self.v_radii.get()
+
+    def _export_current(self):
+        return bool(self.exported) and self.exported["sig"] == self._export_sig()
+
+    def _pic_button(self):
+        """Copy picture i/n of the current list (the last export's next picture while it still matches the list)."""
+        n = math.ceil(len(self.rows) / export.PER_SHEET)
+        i = self.exported["next"] if self._export_current() else 0
+        self.b_pic.configure(state="normal" if n else "disabled", text="Copy picture" + (f" {i + 1}/{n}" if n > 1 else ""))
+
+    def _copy_message(self):
+        if not self._export():
+            return
+        e = self.exported
+        self.root.clipboard_clear(); self.root.clipboard_append(e["msg"]); self.root.update()
+        e["msg_copied"], e["msg_stale"] = True, False
+        self._pic_button()
+        long = " It is over Discord's 2,000 characters: split it." if len(e["msg"]) > 2000 else ""
+        self.l_status_flash(f"The vote message for {len(self.rows)} maps is copied: paste it in Discord, then "
+                            f"“Copy picture” and paste again into the same message.{long}")
+
+    def _copy_picture(self):
+        """Copy the next picture of the current list (one at a time: the clipboard holds a single picture)."""
+        if not self._export():
+            return
+        e = self.exported
+        pics, i = e["pics"], e["next"]
+        try:
+            export.copy_picture(pics[i])
+        except OSError as err:
+            messagebox.showerror(APP, f"Could not copy the picture: {err}"); return
+        e["next"] = (i + 1) % len(pics); self._pic_button()
+        more = f" Then “Copy picture” again for picture {i + 2}." if i + 1 < len(pics) else ""
+        which = f"Picture {i + 1} of {len(pics)}" if len(pics) > 1 else "The picture"
+        stale = (" The list has changed since you copied the vote message, so its numbers are off: copy it again."
+                 if e["msg_stale"] else "")
+        self.l_status_flash(f"{which} is copied: paste it into the Discord message (Ctrl+V).{more}{stale}")
+
+    def _open_exports(self):
+        """The folder with the pictures of the current list, else (nothing listed) the folder with all exports."""
+        if self._export():
+            os.startfile(self.exported["folder"])
+        else:
+            os.makedirs(EXPORTS, exist_ok=True); os.startfile(EXPORTS)
+
     def _thumb(self, r):
         key, mode = r["key"], r.get("mode", "full")
         det = self.v_details.get() and mode == "full"
@@ -712,7 +800,7 @@ class App:
             p = self._image_path(key, mode, det)
             try:
                 im = Image.open(p); im.thumbnail(self.thumb, Image.LANCZOS)
-                self.thumbs[key, mode, det] = ImageTk.PhotoImage(im)
+                self.thumbs[key, mode, det] = ImageTk.PhotoImage(analyze.mountain_contrast(im))
             except OSError:
                 return None
         return self.thumbs[key, mode, det]
@@ -731,6 +819,7 @@ class App:
                 pass
         if self.selected:
             self._load_big(self.selected)
+        self._pic_button()
 
     def _add_card(self, r, i):
         key = r["key"]
@@ -803,7 +892,8 @@ class App:
     def _load_big(self, r):
         mode = r.get("mode", "full")
         try:
-            self._big_src = Image.open(self._image_path(r["key"], mode, self.v_details.get() and mode == "full")).convert("RGB")
+            self._big_src = analyze.mountain_contrast(
+                Image.open(self._image_path(r["key"], mode, self.v_details.get() and mode == "full")))
         except OSError:
             self._big_src = None
         self._show_big()

@@ -54,7 +54,7 @@ def stage2(job):
         A = np.frombuffer(la, np.uint8).reshape(size, size, 4)
         B = np.frombuffer(lb, np.uint8).reshape(size, size, 4)
         per = analyze.evaluate_tiles(A, B, starts, mirror=s4key.decode(key)["mirror"])
-        analyze.render(A, B, starts).save(os.path.join(img_dir, key + ".png"))
+        analyze.mountain_contrast(analyze.render(A, B, starts)).save(os.path.join(img_dir, key + ".png"))
         return key, analyze.score_tiles(per), per, starts
     except Exception as e:
         return key, -1.0, str(e), []

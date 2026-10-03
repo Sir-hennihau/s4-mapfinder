@@ -121,6 +121,16 @@ found in earlier runs that you haven't seen yet are shown first, instantly.
 - **Red ✕** (top left of a card): dismisses a map you don't like. It disappears from the list for good, in both
   modes, and is never offered again; **Undo dismiss** below the list brings back the last ones dismissed.
 - **Copy all keys** (below the list): copies the keys of all listed maps, one per line.
+- **Discord** (below the list): turns the listed maps into a map vote. **Copy vote message** copies a message
+  listing each map's vote number with its key and score; paste it into Discord. **Copy picture** copies a picture
+  of six maps, each with a big gold vote number, its key and its score, and the lobby settings on top; paste it into
+  the same message (with more than six maps, press it once per picture: *Copy picture 1/3*, *2/3*, …), and send.
+  **Open folder** opens the folder with the pictures, to drag them into Discord instead. Every button works from
+  the list as it is when you press it: dismissed maps are never in it, and if the list changed, the pictures are
+  made again (if you'd already copied the vote message, you're told to copy it again, as its numbers changed).
+  With up to 10 maps the message uses Discord's number emojis (:one: … :keycap_ten:) so people can vote by
+  reacting; with more, they reply with the number. The pictures look like the big picture in the app: *Show full
+  details* and *Show radii* apply.
 - **Big picture:** drawn like the in-game minimap: a slanted map, red circles for team 1 (P1–P3) and blue for team 2
   (P4–P6). In lobby preview mode it shows exactly what the lobby preview shows: water, land, mountain (grey) and
   desert. In full map mode it is the whole generated map.
@@ -314,6 +324,8 @@ Known-good league keys (6 players, 1024, land 90 %, minerals higher, short diago
 Everything is in `%LOCALAPPDATA%\S4MapFinder`:
 
 - `config.json`: your settings, including the game folder and scoring parameters.
+- `discord\`: the Discord map votes, one folder per list (made again when the list changes), with the pictures
+  (`maps_1.png`, …) and the vote message (`message.txt`).
 - `maps\<players>p_<size>_land<land>_min<minerals>_mirror<mirror>\`: one folder per lobby setting combination, with
   the found maps (`deep*.json` for full map mode, `preview*.json` for lobby preview mode), checked keys
   (`scan*.json`), the maps you've been shown (`shown.json`, `shown_preview.json`), and the pictures (`img\`).
@@ -376,6 +388,7 @@ parameters.
 | `analyze.py` | Player areas, metrics, scoring, and rendering. |
 | `s4gen.py` | Unicorn emulator for the generator. It stubs the CRT/Win32 functions the generator uses. |
 | `s4key.py` | Map key ↔ settings (base32, least-significant character first: players, minerals, size, mirror, land, 20-bit seed). |
+| `export.py` | Export for Discord: numbered picture sheets and the vote message. |
 | `mapfinder.py` | Command-line version. |
 | `s4map.py` | Reads saved `.map` files using the game's own decrypt and decompress routines. |
 | `validate.py` | Compares emulated output with real `Map\User\UnitedLeague_*.map` saves. Terrain matches about 88–90 % per byte: mountains, lakes and land outline are identical, and only coast and transition texturing differ. |

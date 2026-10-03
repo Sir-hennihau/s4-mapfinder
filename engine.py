@@ -263,8 +263,15 @@ class Store:
             _save(self.deep_file, self.deep)
             _save(self.shown_file, sorted(self.shown))
 
+    def _reload_dismissed(self):
+        """The file is the truth: another Store of these settings (e.g. the other mode's, or the app's while a
+        search runs) may have dismissed maps since this one was opened."""
+        self.dismissed.clear(); self.dismissed.update(_load(self.dismissed_file, []))
+        self.shown |= self.dismissed
+
     def dismiss(self, key, on=True):
         with self.lock:
+            self._reload_dismissed()
             if on:
                 self.dismissed.add(key); self.shown.add(key)
             else:
@@ -275,6 +282,8 @@ class Store:
         """All fully generated maps (best first)."""
         s = self.settings
         rows = []
+        with self.lock:
+            self._reload_dismissed()
         for k, d in list(self.deep.items()):
             if self.current(k) and k not in self.dismissed:
                 r = dict(d, key=k, score=rescore(k, d["players"], self.params, self.mode))  # current targets/weights
