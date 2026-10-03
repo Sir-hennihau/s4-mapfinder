@@ -136,6 +136,7 @@ class App:
         self.search = None
         self.store = None
         self.rows = []           # rows currently listed
+        self.search_rows = []    # the last search's maps ("This search"; self.rows is this list while it's shown)
         self.thumbs = {}         # (key, mode, details) -> PhotoImage (keep references!)
         self.cards = {}
         self.card_imgs = {}      # key -> thumbnail label of its card
@@ -533,7 +534,7 @@ class App:
         self._save_config()
         self.store = None
         st = self._store()
-        self.v_view.set("new"); self.rows = []; self._render_list()
+        self.v_view.set("new"); self.search_rows = []; self.rows = self.search_rows; self._render_list()
         self.greed = {}; self._color_lines()
         for l in self.reject_lbls:
             l.grid_remove()
@@ -602,20 +603,22 @@ class App:
                 if ev == "progress":
                     self._status(data)
                 elif ev == "found":
-                    if (self.v_view.get() == "new" and self.search and self.store is self.search.store
-                            and data["key"] not in self.store.dismissed):
-                        self.rows.append(data); self._add_card(data, len(self.rows) - 1)
-                        self._count()
-                        if self.selected is None:
-                            self._select(data)
+                    if self.search and data["key"] not in self.search.store.dismissed:
+                        self.search_rows.append(data)  # kept while another list is shown
+                        if self.rows is self.search_rows:
+                            self._add_card(data, len(self.rows) - 1)
+                            self._count()
+                            if self.selected is None:
+                                self._select(data)
                 elif ev == "done":
                     self.b_find.configure(text="Find new maps", state="normal")
                     for b in self.mode_btns:
                         b.configure(state="normal")
                     if str(data).startswith("error"):
                         messagebox.showerror(APP, f"The search stopped with an {data}")
-                    if self.v_view.get() == "new" and self.rows:
-                        self._sort_rows(); self._render_list()
+                    self._sort_rows(self.search_rows)
+                    if self.rows is self.search_rows and self.rows:
+                        self._render_list()
                 elif ev == "checked":
                     self.b_check.configure(state="normal")
                     if "error" in data:
@@ -651,19 +654,26 @@ class App:
             st.shown.clear(); st.shown |= st.dismissed; st.save(); self._load_list()
 
     # ------------------------------------------------------------------ list
-    def _sort_rows(self):
+    def _sort_rows(self, rows=None):
         s = self._settings()
         P = self._valid_params()
-        self.rows.sort(key=lambda r: engine.rank_key(r["score"], r["players"], s["size"], s["players"], P))
+        (self.rows if rows is None else rows).sort(
+            key=lambda r: engine.rank_key(r["score"], r["players"], s["size"], s["players"], P))
 
     def _load_list(self):
-        if self.search and self.search.is_alive() and self.v_view.get() == "new":
-            return
         st = self._store()
         if self.v_view.get() == "all":
             self.rows = st.found()
-        else:
-            self.rows = []
+        else:  # the last search's maps, if it was for these settings and mode
+            ss = self.search.store if self.search else None
+            same = ss is not None and ss.settings == st.settings and ss.mode == st.mode
+            self.rows = self.search_rows if same else []
+            if same and not self.search.is_alive():  # re-score with the current Scoring tab, as "All found maps"
+                P = self._valid_params()
+                for r in self.rows:
+                    if engine.row_geo(r) == engine.geo(P):
+                        r["score"] = engine.rescore(r["key"], r["players"], P, r.get("mode", "full"))
+                self._sort_rows()
         self._render_list()
 
     def _render_list(self, keep_scroll=False):
@@ -694,7 +704,10 @@ class App:
         """Throw a map out of the list for good (Undo dismiss brings it back)."""
         st = self._store()
         st.dismiss(r["key"])
-        self.undo.append((st, r)); self.b_undo.configure(state="normal")
+        in_search = any(x["key"] == r["key"] for x in self.search_rows)
+        self.undo.append((st, r, in_search)); self.b_undo.configure(state="normal")
+        if self.rows is not self.search_rows:  # gone from "This search" too
+            self.search_rows[:] = [x for x in self.search_rows if x["key"] != r["key"]]
         i = next((j for j, x in enumerate(self.rows) if x["key"] == r["key"]), None)
         if i is not None:
             del self.rows[i]
@@ -708,11 +721,15 @@ class App:
     def _undo_dismiss(self):
         if not self.undo:
             return
-        st, r = self.undo.pop()
+        st, r, in_search = self.undo.pop()
         st.dismiss(r["key"], False)
         self.b_undo.configure(state="normal" if self.undo else "disabled")
-        if st is self._store() and all(x["key"] != r["key"] for x in self.rows):
-            self.rows.append(r); self._sort_rows(); self._render_list(keep_scroll=True)
+        if in_search and all(x["key"] != r["key"] for x in self.search_rows):
+            self.search_rows.append(r); self._sort_rows(self.search_rows)
+        if (self.rows is not self.search_rows and st is self._store()
+                and all(x["key"] != r["key"] for x in self.rows)):
+            self.rows.append(r); self._sort_rows()
+        self._render_list(keep_scroll=True)
         self._select(r)
         self.l_status_flash(f"{r['key']} is back.")
 
