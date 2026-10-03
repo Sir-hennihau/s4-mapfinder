@@ -93,6 +93,7 @@ These must match the settings you will choose in the game lobby. Results are kep
 
 | Setting | What it does |
 | --- | --- |
+| **Preset** | Picks a format, for example *2v2 · One diagonal (short or long)*: sets Players and Mirror axis (a short or long diagonal you already chose stays), the whole [Scoring tab](#scoring-tab) and the minimum score (see [Presets](#presets)). Map size, land mass and minerals stay as they are. Shows *Custom* once you change a value it set. |
 | **Players** | Number of players on the map (2–8). For 3 vs 3, use 6. P1–P3 and P4–P6 are the two teams. |
 | **Map size** | Map width and height in tiles (256–1024). |
 | **Land mass** | How much of the map is land rather than water (10–90 %). |
@@ -188,9 +189,40 @@ then combined using their **weights**.
 
 Changing a target or weight re-scores all found maps immediately, so you can sort your maps by what matters to you.
 Changes also steer the next search: its quick check of each key uses the lobby preview lines.
-**Reset to defaults** restores the values below. They are strict: on 3,000 random maps (6 players, 1024, land
-90 %, lobby preview score) about 1 in 750 scores 95 or more, 1 in 250 scores 90 or more and 1 in 33 scores 80 or
-more, so a search for 95+ maps takes a while.
+The values below are the defaults (the *3v3 · One diagonal* [preset](#presets)). They are strict: on 3,000 random
+maps (6 players, 1024, land 90 %, lobby preview score) about 1 in 750 scores 95 or more, 1 in 250 scores 90 or more
+and 1 in 33 scores 80 or more, so a search for 95+ maps takes a while.
+
+### Presets
+
+The **Preset** dropdown on the Search tab fills in this tab for a format: one preset per team size for no mirror,
+one diagonal (short and long diagonal maps measure alike, so they share one) and both diagonals. *3v3 · One
+diagonal* is the defaults. The others were calibrated on 600 to 3,000 random maps of their format (1024, land 90 %,
+minerals higher, lobby preview score) to be as strict as the defaults are for 3v3: each target is reached by the
+same share of maps as there, and the minimum score lets about as many maps through (about 1 in 750). Ore, stone
+field and river targets are scaled along with the mountain and space targets. Where the mirror gives every player
+the same land (1v1 with one diagonal), the fairness lines are off. Weights stay as in the defaults.
+
+Mountain and space in blocks (targets as entered, so before the scaling by players), fairness as weakest ÷ strongest:
+
+| Preset | Mountain / close | Space / close | Fairness mountain / space | Min. score |
+| --- | --- | --- | --- | --- |
+| 1v1 · No mirror | 3.5 / 2 | 7.5 / 4.5 | 0.95 / 0.8 | 88 |
+| 1v1 · One diagonal | 5 / 3 | 12 / 8 | off / off | 95 |
+| 1v1 · Both diagonals | 4 / 2.5 | 11 / 7 | 0.95 / 0.95 | 98 |
+| 2v2 · No mirror | 5 / 2.5 | 13 / 8 | 0.6 / 0.5 | 94 |
+| 2v2 · One diagonal | 5.5 / 3.5 | 15.5 / 11.5 | 0.95 / 0.9 | 95 |
+| 2v2 · Both diagonals | 5.5 / 4 | 18 / 14 | 0.95 / 0.95 | 98 |
+| 3v3 · No mirror | 6 / 3 | 15.5 / 11.5 | 0.4 / 0.4 | 94 |
+| 3v3 · One diagonal *(the defaults)* | 5.5 / 3.5 | 18 / 15 | 0.7 / 0.7 | 95 |
+| 3v3 · Both diagonals | 4.5 / 3.5 | 17 / 15 | 0.75 / 0.7 | 94 |
+| 4v4 · No mirror | 5.5 / 3 | 17.5 / 13.5 | 0.3 / 0.35 | 92 |
+| 4v4 · One diagonal | 5 / 3.5 | 18 / 16.5 | 0.5 / 0.55 | 97 |
+| 4v4 · Both diagonals | 5 / 3.5 | 21 / 18.5 | 0.85 / 0.85 | 95 |
+
+Unmirrored maps are much less fair, so their fairness targets are low: with 4 players a side, the weakest player
+gets 30 % of the strongest's mountain on only 1 in 20 random maps. **Reset to preset** restores the preset of the
+players and mirror axis you have chosen.
 
 ### Player areas
 

@@ -21,6 +21,9 @@ LANDS = [f"{v}%" for v in range(10, 100, 10)]
 MINERALS = {"Lower": 5, "Normal": 10, "Higher": 15}
 MIRRORS = {"None": 0, "Short diagonal": 1, "Long diagonal": 2, "Short and long diagonals": 3}
 MODES = {"preview": "Lobby preview", "full": "Full map"}
+# presets (analyze.PRESETS): one per team size and mirror group, e.g. "2v2 · One diagonal" -> (4, 1)
+PRESET_NAMES = {f"{p // 2}v{p // 2} · {m}": (p, v) for p in (2, 4, 6, 8)
+                for m, v in (("No mirror", 0), ("One diagonal (short or long)", 1), ("Both diagonals", 3))}
 STAT_COLS = [("space", "Space"), ("space_near", "Space ≤{near}"), ("mtn", "Mountain"), ("mtn_near", "Mtn ≤{near}"),
              ("fields", "Fields"), ("snow", "Snow"), ("gold", "Gold"), ("coal", "Coal"), ("iron", "Iron"),
              ("stone", "Stone ore"), ("sulfur", "Sulfur"), ("stonefield", "Stones"), ("stonefield_near", "Stones ≤{near}"),
@@ -208,17 +211,27 @@ class App:
         self.v_land = tk.StringVar(value=f"{c.get('land', 90)}%")
         self.v_min = tk.StringVar(value=c.get("minerals_name", "Higher"))
         self.v_mirror = tk.StringVar(value=c.get("mirror_name", "Short diagonal"))
-        rows = [("Players", ttk.Spinbox(lob, from_=2, to=8, textvariable=self.v_players, width=6)),
+        self.v_preset = tk.StringVar(value="Custom")
+        pre = ttk.Combobox(lob, values=list(PRESET_NAMES), textvariable=self.v_preset, state="readonly", width=34)
+        pre.bind("<<ComboboxSelected>>", lambda e: self._apply_preset())
+        rows = [("Preset", pre),
+                ("Players", ttk.Spinbox(lob, from_=2, to=8, textvariable=self.v_players, width=6)),
                 ("Map size", ttk.Combobox(lob, values=SIZES, textvariable=self.v_size, state="readonly", width=12)),
                 ("Land mass", ttk.Combobox(lob, values=LANDS, textvariable=self.v_land, state="readonly", width=12)),
                 ("Minerals", ttk.Combobox(lob, values=list(MINERALS), textvariable=self.v_min, state="readonly", width=12)),
                 ("Mirror axis", ttk.Combobox(lob, values=list(MIRRORS), textvariable=self.v_mirror, state="readonly", width=22))]
         for i, (t, w) in enumerate(rows):
+            i += i > 0  # row 1: the preset's hint
             ttk.Label(lob, text=t).grid(row=i, column=0, sticky="w", pady=3)
             w.grid(row=i, column=1, sticky="w", padx=(8, 0), pady=3)
-            if isinstance(w, ttk.Combobox):
+            if isinstance(w, ttk.Combobox) and w is not pre:
                 w.bind("<<ComboboxSelected>>", lambda e: self._load_list())
         self.v_players.trace_add("write", lambda *a: self.root.after(300, self._load_list))
+        for v in (self.v_players, self.v_mirror):
+            v.trace_add("write", lambda *a: self.root.after_idle(self._sync_preset))
+        ttk.Label(lob, text="Sets players, mirror axis, the Scoring tab and the minimum score.", style="Muted.TLabel",
+                  wraplength=int(250 * self.k), justify="left").grid(row=1, column=0, columnspan=2, sticky="w",
+                                                                     pady=(0, 6))
 
         se = ttk.LabelFrame(tab, text="Search", padding=10)
         se.grid(row=2, column=0, sticky="ew", pady=(10, 0))
@@ -235,6 +248,7 @@ class App:
             if hint:
                 ttk.Label(se, text=hint, style="Muted.TLabel").grid(row=2 * i + 1, column=0, columnspan=2, sticky="w")
         self._build_scoring(tab_sc)
+        self._sync_preset()
         self.b_find = ttk.Button(side, text="Find new maps", style="Big.TButton", command=self._toggle_search)
         self.b_find.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(12, 4))
         self.pbar = ttk.Progressbar(side, mode="determinate"); self.pbar.grid(row=6, column=0, columnspan=2, sticky="ew")
@@ -418,7 +432,7 @@ class App:
             row=i, column=0, columnspan=3, sticky="w", pady=(4, 0))
 
         bot = ttk.Frame(tab); bot.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(bot, text="Reset to defaults", command=self._reset_params).pack(side="left")
+        ttk.Button(bot, text="Reset to preset", command=self._reset_params).pack(side="left")
         self.l_par = ttk.Label(tab, text="", style="Muted.TLabel", wraplength=wrap, justify="left")
         self.l_par.grid(row=3, column=0, sticky="w", pady=(4, 0))
         for v in self.v_par.values():
@@ -460,8 +474,38 @@ class App:
             "Found maps are re-scored right away."))
 
     def _reset_params(self):
-        for k, v in analyze.DEFAULT_PARAMS.items():
+        """Back to the preset of the chosen players and mirror axis (DEFAULT_PARAMS if there is none)."""
+        try:
+            pr = analyze.preset(int(self.v_players.get()), MIRRORS[self.v_mirror.get()])
+        except (ValueError, KeyError):
+            pr = None
+        for k, v in (pr[0] if pr else analyze.DEFAULT_PARAMS).items():
             self.v_par[k].set(str(v))
+
+    def _apply_preset(self):
+        players, group = PRESET_NAMES[self.v_preset.get()]
+        P, min_score = analyze.preset(players, group)
+        self.v_players.set(str(players))
+        if analyze.MIRROR_GROUP.get(MIRRORS.get(self.v_mirror.get())) != group:  # keep short or long diagonal
+            self.v_mirror.set(next(n for n, v in MIRRORS.items() if v == group))
+        for k, v in P.items():
+            self.v_par[k].set(str(v))
+        self.v_minscore.set(str(min_score))
+        self._load_list()
+
+    def _sync_preset(self):
+        """Show the preset that matches players, mirror axis and the Scoring tab, else "Custom"."""
+        if not hasattr(self, "v_par"):
+            return
+        try:
+            players, mirror = int(self.v_players.get()), MIRRORS[self.v_mirror.get()]
+            P = self._score_params()
+        except (ValueError, KeyError):
+            self.v_preset.set("Custom"); return
+        pr = analyze.preset(players, mirror)
+        same = pr is not None and all(abs(P[k] - v) < 1e-9 for k, v in pr[0].items())
+        fmt = (players, analyze.MIRROR_GROUP[mirror])
+        self.v_preset.set(next((n for n, pm in PRESET_NAMES.items() if pm == fmt), "Custom") if same else "Custom")
 
     def _params_edited(self):
         if self._par_job:
@@ -473,8 +517,9 @@ class App:
         try:
             P = self._score_params()
         except ValueError as e:
-            self.l_par.configure(text=str(e), foreground="#c62828"); return
+            self.l_par.configure(text=str(e), foreground="#c62828"); self._sync_preset(); return
         self._params_note(P)
+        self._sync_preset()
         if self.search and self.search.is_alive():
             self.l_par.configure(text=self.l_par.cget("text") + " The running search keeps the settings it started with.")
             if self.v_view.get() == "new":

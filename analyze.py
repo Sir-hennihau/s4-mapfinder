@@ -220,6 +220,70 @@ def params_of(p=None):
     return out
 
 
+# Presets per lobby format (players, mirror group: 0 none, 1 one diagonal, short or long, 3 both diagonals): score
+# parameters (changes from DEFAULT_PARAMS) and the minimum score to search with. 3v3 one diagonal is DEFAULT_PARAMS.
+# The others are calibrated on random maps of their format (1024, land 90 %, minerals higher, lobby preview) so
+# that every line is as strict as there: the same share of maps reaches its target, and the minimum score finds
+# maps about as often. Short and long diagonal maps measure alike, so they share a preset. Full-map-only targets
+# are scaled with the mountain (ore) and space (stone fields, river) targets. Where the mirror makes all players
+# equal, the fairness lines are off.
+PRESETS = {
+    # 1v1, no mirror
+    (2, 0): dict(t_mtn=3.5, t_mtn_near=2.0, t_space=7.5, t_space_near=4.5, t_fair_mtn=0.95, t_fair_space=0.8,
+                 t_gold=100, t_coal=510, t_iron=190, t_stone=130, t_sulfur=60, t_stonefield=170,
+                 t_stonefield_near=100, t_river=40, t_river_near=20, min_score=88),
+    # 1v1, one diagonal
+    (2, 1): dict(t_mtn=5.0, t_mtn_near=3.0, t_space=12.0, t_space_near=8.0, w_fair_mtn=0, w_fair_space=0,
+                 t_gold=140, t_coal=730, t_iron=270, t_stone=180, t_sulfur=90, t_stonefield=270,
+                 t_stonefield_near=170, t_river=70, t_river_near=40, min_score=95),
+    # 1v1, both diagonals
+    (2, 3): dict(t_mtn=4.0, t_mtn_near=2.5, t_space=11.0, t_space_near=7.0, t_fair_mtn=0.95, t_fair_space=0.95,
+                 t_gold=110, t_coal=580, t_iron=220, t_stone=150, t_sulfur=70, t_stonefield=240,
+                 t_stonefield_near=150, t_river=60, t_river_near=40, min_score=98),
+    # 2v2, no mirror
+    (4, 0): dict(t_mtn=5.0, t_mtn_near=2.5, t_space=13.0, t_space_near=8.0, t_fair_mtn=0.6, t_fair_space=0.5,
+                 t_gold=140, t_coal=730, t_iron=270, t_stone=180, t_sulfur=90, t_stonefield=290,
+                 t_stonefield_near=180, t_river=70, t_river_near=40, min_score=94),
+    # 2v2, one diagonal
+    (4, 1): dict(t_space=15.5, t_space_near=11.5, t_fair_mtn=0.95, t_fair_space=0.9, t_stonefield=340,
+                 t_stonefield_near=220, t_river=90, t_river_near=50, min_score=95),
+    # 2v2, both diagonals
+    (4, 3): dict(t_mtn_near=4.0, t_space_near=14.0, t_fair_mtn=0.95, t_fair_space=0.95, min_score=98),
+    # 3v3, no mirror
+    (6, 0): dict(t_mtn=6.0, t_mtn_near=3.0, t_space=15.5, t_space_near=11.5, t_fair_mtn=0.4, t_fair_space=0.4,
+                 t_gold=160, t_coal=870, t_iron=330, t_stone=220, t_sulfur=110, t_stonefield=340,
+                 t_stonefield_near=220, t_river=90, t_river_near=50, min_score=94),
+    # 3v3, one diagonal (the defaults)
+    (6, 1): dict(min_score=95),
+    # 3v3, both diagonals
+    (6, 3): dict(t_mtn=4.5, t_space=17.0, t_fair_mtn=0.75, t_gold=120, t_coal=650, t_iron=250, t_stone=160,
+                 t_sulfur=80, t_stonefield=380, t_stonefield_near=240, t_river=90, min_score=94),
+    # 4v4, no mirror
+    (8, 0): dict(t_mtn_near=3.0, t_space=17.5, t_space_near=13.5, t_fair_mtn=0.3, t_fair_space=0.35,
+                 t_stonefield=390, t_stonefield_near=240, min_score=92),
+    # 4v4, one diagonal
+    (8, 1): dict(t_mtn=5.0, t_space_near=16.5, t_fair_mtn=0.5, t_fair_space=0.55, t_gold=140, t_coal=730,
+                 t_iron=270, t_stone=180, t_sulfur=90, min_score=97),
+    # 4v4, both diagonals
+    (8, 3): dict(t_mtn=5.0, t_space=21.0, t_space_near=18.5, t_fair_mtn=0.85, t_fair_space=0.85, t_gold=140,
+                 t_coal=730, t_iron=270, t_stone=180, t_sulfur=90, t_stonefield=470, t_stonefield_near=290,
+                 t_river=120, t_river_near=70, min_score=95),
+}
+
+
+MIRROR_GROUP = {0: 0, 1: 1, 2: 1, 3: 3}
+
+
+def preset(players, mirror):
+    """(score parameters, minimum score) of the preset for this lobby format, or None."""
+    p = PRESETS.get((players, MIRROR_GROUP.get(mirror)))
+    if p is None:
+        return None
+    p = dict(p)
+    min_score = p.pop("min_score")
+    return params_of(p), min_score
+
+
 def radii(P):
     """The radii in tiles (for 1024; scaled by size where used)."""
     return {k: int(round(P[k] * BLOCK_SIZE)) for k in GEO_KEYS}
