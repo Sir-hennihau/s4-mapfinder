@@ -147,15 +147,15 @@ def zone_sum(zs, val, i, near=None):
     return tot
 
 
-def field_counts(lab, zs, msec, n, min_share):
-    """Mountain patches per player, without double counting: a patch counts for the player holding the
-    largest share of it (if >= min_share); another player counts it too only when the patch is genuinely
-    split (they hold >= SPLIT_SHARE of it and >= min_share)."""
+def field_counts(lab, zs, msec, n, min_share, within=None):
+    """Mountain patches per player (counting the part within `within` tiles of the castle), without double
+    counting: a patch counts for the player holding the largest share of it (if >= min_share); another player
+    counts it too only when the patch is genuinely split (they hold >= SPLIT_SHARE of it and >= min_share)."""
     fields = [0] * n
     for b in range(1, int(lab.max()) + 1):
         sel = lab == b
         part = [v * sel for v in msec] if isinstance(msec, list) else msec * sel
-        shares = np.array([zone_sum(zs, part, i) for i in range(n)])
+        shares = np.array([zone_sum(zs, part, i, within) for i in range(n)])
         tot = shares.sum()
         if tot <= 0:
             continue
@@ -167,13 +167,21 @@ def field_counts(lab, zs, msec, n, min_share):
 
 
 # --- score parameters (editable in the app) ------------------------------------------
-# Radii are in tiles and tile targets are for 1024x1024 with 6 players; both are scaled for other settings.
+# Radii are in block widths (56 tiles) and targets are for 1024x1024 with 6 players; both are scaled for other settings.
 # t_* = value the weakest player needs for full points on that line, w_* = relative weight of the line.
+# Mountain and space targets are in blocks: the generator lays the map out on a grid of 56x56-tile blocks, which
+# players see as the squares in the lobby preview. A block of land is 3,136 tiles; a mountain block holds ~2,800
+# mountain tiles, as a mountain doesn't fill its block (foot included; 8 maps: 2,680-2,930).
+BLOCK_TILES = 2800
+BLOCK_SIZE = 56
+SPACE_BLOCK_TILES = BLOCK_SIZE * BLOCK_SIZE
+BLOCK_UNIT = dict(mtn=BLOCK_TILES, mtn_near=BLOCK_TILES, space=SPACE_BLOCK_TILES, space_near=SPACE_BLOCK_TILES)
 DEFAULT_PARAMS = dict(
-    radius=200, near=150, snow=0.5,
+    radius=4.5, near=3, snow=0,  # snow never has ore: by default only rock counts as mountain
+    own_start=1,  # full map: 0 points unless every player has a stone field and a forest of their own at the castle
     # seen in the lobby preview
-    t_mtn=9000, t_mtn_near=5000, t_space=40000, t_space_near=30000, t_fair_mtn=0.6, t_fair_space=0.6,
-    w_mtn=30, w_mtn_near=15, w_space=30, w_space_near=0, w_fair_mtn=10, w_fair_space=5,
+    t_mtn=5.5, t_mtn_near=3.5, t_space=18, t_space_near=15, t_fair_mtn=0.7, t_fair_space=0.7,
+    w_mtn=30, w_mtn_near=20, w_space=10, w_space_near=10, w_fair_mtn=15, w_fair_space=15,
     # only known from the full map
     t_gold=150, t_coal=800, t_iron=300, t_stone=200, t_sulfur=100,
     t_stonefield=400, t_stonefield_near=250, t_river=100, t_river_near=60,
@@ -187,11 +195,15 @@ FULL_LINES = PREVIEW_LINES + ("gold", "coal", "iron", "stone", "sulfur",
                               "stonefield", "stonefield_near", "river", "river_near")
 LINES = FULL_LINES
 MODES = ("preview", "full")
-PREVIEW_KEYS = ("radius", "near") + tuple(p + k for k in PREVIEW_LINES for p in ("t_", "w_"))  # the pre-screen uses these
+PREVIEW_KEYS = ("radius", "near", "snow") + tuple(p + k for k in PREVIEW_LINES for p in ("t_", "w_"))  # the pre-screen uses these
 
 
 def lines_for(mode):
     return PREVIEW_LINES if mode == "preview" else FULL_LINES
+
+
+OLD_TILE_DEFAULTS = dict(t_mtn=9000, t_mtn_near=5000, t_space=40000, t_space_near=30000)  # were in tiles before
+OLD_RADII = dict(radius=(200, 250), near=(150,))  # radii were in tiles before; these were defaults
 
 
 def params_of(p=None):
@@ -199,25 +211,57 @@ def params_of(p=None):
     for k, v in (p or {}).items():
         if k in DEFAULT_PARAMS:
             v = float(v)
+            if k in OLD_TILE_DEFAULTS and v > 200:  # a saved target in tiles: the old default or the same in blocks
+                v = DEFAULT_PARAMS[k] if v == OLD_TILE_DEFAULTS[k] else round(v / BLOCK_UNIT[k[2:]], 1)
+            if k in OLD_RADII and v >= 20:  # a saved radius in tiles
+                v = DEFAULT_PARAMS[k] if v in OLD_RADII[k] else round(v / BLOCK_SIZE, 1)
             out[k] = int(v) if v.is_integer() else v  # 200.0 and 200 must hash alike
     return out
 
 
-PREVIEW_CAL = dict(space=1.0, mtn=1.12)  # fitted on 120 random maps (full-map / preview, per player)
+def radii(P):
+    """The radii in tiles (for 1024; scaled by size where used)."""
+    return {k: int(round(P[k] * BLOCK_SIZE)) for k in GEO_KEYS}
 
 
-def evaluate_preview(pv, starts, size=1024, radius_tiles=200, mirror=None, near_tiles=150):
+def target(P, line):
+    """A line's target in the unit of its metric (tiles; mountain and space targets are set in blocks)."""
+    return P["t_" + line] * BLOCK_UNIT.get(line, 1)
+
+
+PREVIEW_CAL = dict(space=1.0, mtn=1.12, snow=1.05)  # fitted on 120 random maps (full-map / preview, per player)
+# The preview shows no snow, but snow sits on the tops of big mountains: share of snow (snow edge included) in a
+# mountain pixel by how deep inside the mountain it is (tiles to the nearest non-mountain pixel), fitted like PREVIEW_CAL
+SNOW_DEPTH = ((0, 6.4, 12.8, 19.2, 25.6, 32, 38.4, 44.8, 51.2), (0, .013, .036, .069, .134, .42, .65, .77, .78))
+
+
+def mountain_depth(mask):
+    """Hex steps from each mountain pixel to the nearest non-mountain pixel (1 = on the edge, 0 = no mountain)."""
+    m = mask.copy()
+    d = np.zeros(mask.shape, np.int32)
+    h, w = mask.shape
+    while m.any():
+        d += m
+        p = np.pad(m, 1, constant_values=True)  # the map border isn't a mountain edge
+        for dx, dy in NB:
+            m = m & p[1 + dy:1 + dy + h, 1 + dx:1 + dx + w]
+    return d
+
+
+def evaluate_preview(pv, starts, size=1024, radius_tiles=250, mirror=None, near_tiles=150):
     """Per-player metrics from the lobby preview, in full-map tiles (each preview pixel is ~6.4x6.4 tiles), so
     preview and full-map metrics can be scored with the same targets."""
     scale = size / PV
     water, mtn, build = classify(pv)
     zs = zones(~water, starts, scale, int(radius_tiles / scale), mirror, size, sub=8)
+    snow = mtn * np.interp(mountain_depth(mtn > 0) * scale, *SNOW_DEPTH)
     lab, _ = blobs(mtn > 0)
-    fields = field_counts(lab, zs, mtn, len(starts), 4)
+    fields = field_counts(lab, zs, mtn - snow, len(starts), 4, radius_tiles)  # like the full map: field size = mineable part
     cell = scale * scale  # tiles per preview pixel; PREVIEW_CAL turns pixel counts into full-map tile counts
-    q = lambda v, k, i, d=None: int(round(zone_sum(zs, v, i, d) * cell * PREVIEW_CAL[k]))
-    return [dict(space=q(build, "space", i), space_near=q(build, "space", i, near_tiles),
-                 mtn=q(mtn, "mtn", i), mtn_near=q(mtn, "mtn", i, near_tiles), fields=fields[i])
+    q = lambda v, k, i, d: int(round(zone_sum(zs, v, i, d) * cell * PREVIEW_CAL[k]))
+    return [dict(space=q(build, "space", i, radius_tiles), space_near=q(build, "space", i, near_tiles),
+                 mtn=q(mtn, "mtn", i, radius_tiles), mtn_near=q(mtn, "mtn", i, near_tiles), fields=fields[i],
+                 snow=q(snow, "snow", i, radius_tiles), snow_near=q(snow, "snow", i, near_tiles))
             for i in range(len(starts))]
 
 
@@ -233,10 +277,58 @@ SNOW_T = (35, 128, 129)
 ORES = {1: "coal", 2: "iron", 3: "gold", 4: "sulfur", 5: "stone"}  # ore under mountains (B layer byte 3)
 RIVER_T = (96, 97, 98, 99)       # river terrain: not shown in the lobby preview
 STONE_OBJ = range(124, 136)      # stone objects (B layer byte 0), one per tile, 12 sizes; not in the lobby preview
+TREE_OBJ = range(1, 19)          # tree objects, 18 kinds (random maps use the 10 temperate ones); not in the preview
 BLK = 4  # analysis block size in tiles
+# Start fields: the generator puts a stone field and a forest right next to every castle (10-30 tiles away, 60
+# maps). Sometimes one is missing, or two teammates' castles are so close that they'd have to share one.
+START_DIST = 35  # tiles from the castle
+START_FIELDS = dict(own_stone=(STONE_OBJ, 2, 215), own_forest=(TREE_OBJ, 5, 300))  # objects, gap merged, objects per field
 
 
-def evaluate_tiles(A, B, starts, radius=200, near=150, mirror=None):
+def own_start_fields(B, starts, objs, gap, per_field):
+    """Per player 1 if they get a field of their own within START_DIST tiles of the castle, else 0. Objects up
+    to `gap` tiles apart form one field; each field goes to one player (a field big enough for several to that
+    many), handed out so that as many players as possible get one."""
+    n = B.shape[0]
+    m = np.isin(B[:, :, 0], objs)
+    g = _grow(m, gap)
+    ys, xs = np.nonzero(m)
+    px = xs + (n - ys) / 2.0  # tile positions on the (sheared) map plane
+    lab = np.zeros(m.shape, np.int32); size = [0]
+    cand = []
+    for sx, sy in starts:
+        d = np.hypot(px - (sx + (n - sy) / 2.0), ys - sy)
+        mine = set()
+        for y, x in zip(ys[d <= START_DIST], xs[d <= START_DIST]):
+            if not lab[y, x]:  # flood-fill this field
+                size.append(0); lab[y, x] = b = len(size) - 1; st = [(x, y)]
+                while st:
+                    cx, cy = st.pop(); size[b] += int(m[cy, cx])
+                    for dx, dy in NB:
+                        nx, ny = cx + dx, cy + dy
+                        if 0 <= nx < n and 0 <= ny < n and g[ny, nx] and not lab[ny, nx]:
+                            lab[ny, nx] = b; st.append((nx, ny))
+            mine.add(int(lab[y, x]))
+        cand.append(mine)
+    slots = {b: max(1, round(size[b] / per_field)) for b in set().union(*cand)}
+    taken = {b: [] for b in slots}
+
+    def give(i, seen):  # augmenting path: player i gets a field, maybe moving someone else to another one
+        for b in cand[i]:
+            if b in seen:
+                continue
+            seen.add(b)
+            if len(taken[b]) < slots[b]:
+                taken[b].append(i); return True
+            for j in list(taken[b]):
+                if give(j, seen):
+                    taken[b].remove(j); taken[b].append(i); return True
+        return False
+
+    return [int(give(i, set())) for i in range(len(starts))]
+
+
+def evaluate_tiles(A, B, starts, radius=250, near=150, mirror=None):
     """A,B: (n,n,4) uint8 layers. Returns per-player metrics in tiles (each tile counted for one player)."""
     n = A.shape[0]
     t = A[:, :, 1]; h = A[:, :, 0].astype(np.int16)
@@ -249,6 +341,7 @@ def evaluate_tiles(A, B, starts, radius=200, near=150, mirror=None):
     build = np.isin(t, GRASS) & (slope <= 6)
     river = np.isin(t, RIVER_T)
     stones = np.isin(B[:, :, 0], STONE_OBJ)
+    trees = np.isin(B[:, :, 0], TREE_OBJ)
     ore = B[:, :, 3] >> 4
     ore_ok = ((B[:, :, 3] & 15) > 0) & ~water
     m = n // BLK
@@ -264,26 +357,32 @@ def evaluate_tiles(A, B, starts, radius=200, near=150, mirror=None):
         side_w = [1.0]
     split = lambda a: [blk(a * sw) for sw in side_w]
     mtn_z, build_z, snow_z, river_z, stone_z = split(mtn), split(build), split(snow), split(river), split(stones)
+    tree_z = split(trees)
     ore_z = {k: split((ore == k) & ore_ok) for k in ORES}
     lab, _ = blobs(blk(mtn) >= BLK * BLK // 2)
     mineable = [a - b for a, b in zip(mtn_z, snow_z)]
-    fields = field_counts(lab, zs, mineable, len(starts), 200)  # a field = >= ~200 mineable tiles
+    fields = field_counts(lab, zs, mineable, len(starts), 200, radius)  # a field = >= ~200 mineable tiles
     res = []
-    q = lambda v, i, d=None: int(round(zone_sum(zs, v, i, d)))
+    q = lambda v, i, d: int(round(zone_sum(zs, v, i, d)))
     for i in range(len(starts)):
-        r = dict(space=q(build_z, i), space_near=q(build_z, i, near), mtn=q(mtn_z, i), mtn_near=q(mtn_z, i, near),
-                 fields=fields[i], snow=q(snow_z, i), snow_near=q(snow_z, i, near),
-                 stonefield=q(stone_z, i), stonefield_near=q(stone_z, i, near),
-                 river=q(river_z, i), river_near=q(river_z, i, near))
+        r = dict(space=q(build_z, i, radius), space_near=q(build_z, i, near),
+                 mtn=q(mtn_z, i, radius), mtn_near=q(mtn_z, i, near),
+                 fields=fields[i], snow=q(snow_z, i, radius), snow_near=q(snow_z, i, near),
+                 stonefield=q(stone_z, i, radius), stonefield_near=q(stone_z, i, near),
+                 forest=q(tree_z, i, radius), forest_near=q(tree_z, i, near),
+                 river=q(river_z, i, radius), river_near=q(river_z, i, near))
         for k, name in ORES.items():
-            r[name] = q(ore_z[k], i)
+            r[name] = q(ore_z[k], i, radius)
         res.append(r)
+    for name, (objs, gap, per_field) in START_FIELDS.items():
+        for r, v in zip(res, own_start_fields(B, starts, objs, gap, per_field)):
+            r[name] = v
     return res
 
 
 def effective(p, params=None):
     """Per-player metrics with snow mountain weighted by the 'snow' parameter (stored metrics are raw counts;
-    preview metrics have no snow, the lobby preview doesn't show it)."""
+    in lobby preview mode the snow is estimated, as the preview doesn't show it)."""
     k = 1 - params_of(params)["snow"]
     q = dict(p)
     q["mtn"] = p["mtn"] - k * p.get("snow", 0)
@@ -300,7 +399,7 @@ def score_lines(per, size=1024, players=6, params=None, mode="full"):
     c = lambda v: float(np.clip(v, 0, 1))
     out = {}
     for line in lines_for(mode):
-        t = max(P["t_" + line], 1e-9)
+        t = max(target(P, line), 1e-9)
         if line.startswith("fair_"):
             v = g(line[5:])
             out[line] = c(v.min() / max(v.max(), 1) / t)
@@ -328,15 +427,35 @@ def line_weights(params=None, mode="full"):
     return {k: v / tot for k, v in w.items()}
 
 
+def start_ok(per, params=None, mode="full"):
+    """False if the own-start-fields rule is on and a player lacks one (maps from before it was checked pass)."""
+    return (mode != "full" or not params_of(params)["own_start"]
+            or all(p.get(k, 1) for p in per for k in START_FIELDS))
+
+
 def score_tiles(per, size=1024, players=6, params=None, mode="full"):
     """0-100: weighted average of the score lines. mode "preview" uses only what the lobby preview shows."""
+    if not start_ok(per, params, mode):
+        return 0.0
     lines = score_lines(per, size, players, params, mode)
     w = line_weights(params, mode)
     return round(100 * sum(w[k] * v for k, v in lines.items()), 1)
 
 
+def points_lost(per, size=1024, players=6, params=None, mode="full"):
+    """{line: score points it misses (0-100 scale)}, to tell why a map scored low."""
+    lines = score_lines(per, size, players, params, mode)
+    w = line_weights(params, mode)
+    return {k: 100 * w[k] * (1 - v) for k, v in lines.items() if w[k] > 0}
+
+
 RIVER_RGB = (80, 165, 235)
 STONE_RGB = (185, 185, 178)
+FOREST_RGB = (28, 82, 32)
+TEAM_RGB = [(220, 40, 40), (40, 90, 230)]
+# radius overlay per team: (wide, close) shades, fill opacity and outline opacity
+RADIUS_RGB = [((255, 130, 130), (200, 20, 20)), ((130, 170, 255), (20, 60, 210))]
+RADIUS_FILL, RADIUS_LINE = 0.09, 0.25
 
 
 def _grow(mask, r):
@@ -350,7 +469,8 @@ def _grow(mask, r):
 
 def render(A, B, starts, scale=0.5, shear=True, details=True):
     """In-game-like picture of the full map. details=False shows only what the lobby preview shows (water, land,
-    mountain); details=True adds rivers (light blue), stone fields (grey) and ore. Returns a PIL image."""
+    mountain); details=True adds rivers (light blue), forests (dark green), stone fields (grey) and ore. Returns a PIL
+    image."""
     n = A.shape[0]
     t = A[:, :, 1]; h = A[:, :, 0].astype(float)
     pal = np.zeros((256, 3), np.uint8); pal[:] = (90, 150, 60)
@@ -366,9 +486,11 @@ def render(A, B, starts, scale=0.5, shear=True, details=True):
     gx = np.gradient(h, axis=1); gy = np.gradient(h, axis=0)
     img *= np.clip(1 + 0.04 * (gx + gy), 0.6, 1.4)[:, :, None]
     if details:
-        # rivers are thin and stones single tiles: draw both a little bigger so they show up at picture size
+        # rivers are thin and stones and trees single tiles: draw them a little bigger so they show up at picture
+        # size (trees grow into the forest's area; stones go on top)
         river = _grow(np.isin(t, RIVER_T), max(1, int(round(1 / scale))))
         img[river] = RIVER_RGB
+        img[_grow(np.isin(B[:, :, 0], TREE_OBJ), max(1, int(round(1.5 / scale))))] = FOREST_RGB
         stones = _grow(np.isin(B[:, :, 0], STONE_OBJ), max(1, int(round(1.5 / scale))))
         img[stones] = STONE_RGB
         ore = B[:, :, 3] >> 4; amt = B[:, :, 3] & 15
@@ -396,7 +518,7 @@ def render_preview(pv, starts, size=1024, scale=0.5, shear=True):
 
 def _finish(img, starts, scale, shear):
     """Shear an (n, n, 3) picture into the in-game parallelogram and draw the castles."""
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image
     n = img.shape[0]
     H = int(n * scale)
     W = int(n * scale * (1.5 if shear else 1))
@@ -406,13 +528,18 @@ def _finish(img, starts, scale, shear):
     ok = (x >= 0) & (x < n)
     out = np.full((H, W, 3), 18, np.uint8)
     out[ok] = img[y[ok], x[ok]]
-    im = Image.fromarray(out)
+    return _castles(Image.fromarray(out), starts, n, scale, shear)
+
+
+def _castles(im, starts, n, scale, shear=True):
+    """Draw the numbered castle markers (red team 1, blue team 2) onto a picture made by _finish."""
+    from PIL import ImageDraw, ImageFont
     d = ImageDraw.Draw(im)
     try:
         font = ImageFont.truetype("arialbd.ttf", max(12, int(28 * scale)))
     except OSError:
         font = ImageFont.load_default()
-    team_col = [(220, 40, 40), (40, 90, 230)]
+    team_col = TEAM_RGB
     half = len(starts) // 2
     for i, (sx, sy) in enumerate(starts):
         px = (sx + ((n - sy) / 2 if shear else 0)) * scale; py = sy * scale
@@ -420,3 +547,31 @@ def _finish(img, starts, scale, shear):
         d.ellipse((px - r, py - r, px + r, py + r), fill=team_col[i >= half], outline=(255, 255, 255), width=2)
         d.text((px, py), str(i + 1), fill=(255, 255, 255), font=font, anchor="mm")
     return im
+
+
+def draw_radii(im, starts, n, radius, near, line=2):
+    """Faint wide- and close-radius circles around every castle on a picture made by _finish (any size; n = map
+    size, radii in tiles). Each team's discs are merged, so overlapping
+    teammates don't stack up; only the map area is tinted. Walking distance can only be shorter (water), so the
+    circles are the most a player can get."""
+    from PIL import Image, ImageDraw
+    W, H = im.size
+    k = H / n
+    oy, ox = np.mgrid[0:H, 0:W]
+    x = ox / k - (n - oy / k) / 2
+    on_map = (x >= 0) & (x < n)
+    img = np.asarray(im.convert("RGB"), float).copy()
+    half = len(starts) // 2
+    for team in (0, 1):
+        pts = [((sx + (n - sy) / 2) * k, sy * k) for i, (sx, sy) in enumerate(starts) if (i >= half) == team]
+        wide, close = RADIUS_RGB[team]
+        rings = [(radius, wide, RADIUS_FILL), (near, close, RADIUS_FILL)]
+        for r, rgb, fill_a in rings:
+            fill = Image.new("L", (W, H), 0); edge = Image.new("L", (W, H), 0)
+            df, de = ImageDraw.Draw(fill), ImageDraw.Draw(edge)
+            for px, py in pts:
+                box = (px - r * k, py - r * k, px + r * k, py + r * k)
+                df.ellipse(box, fill=255); de.ellipse(box, outline=255, width=line)
+            a = (np.asarray(fill) / 255 * fill_a + np.asarray(edge) / 255 * RADIUS_LINE).clip(0, 1) * on_map
+            img = img * (1 - a[:, :, None]) + np.array(rgb, float) * a[:, :, None]
+    return _castles(Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)), starts, n, k)  # markers stay on top

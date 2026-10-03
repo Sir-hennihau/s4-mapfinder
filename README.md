@@ -11,9 +11,9 @@ into the lobby.
 It has two modes:
 
 - **Lobby preview:** judges a key only by what the game's lobby preview shows (water, land and mountain), the way
-  players have picked keys for years. Fast.
+  players have picked keys for years. Snow on the big mountains is estimated from their size. Fast.
 - **Full map:** generates the whole map and also scores what the preview hides: ore (gold, coal, iron, stone,
-  sulfur), stone fields to quarry, rivers, and snow on the mountains.
+  sulfur), stone fields to quarry, rivers, and snow on the mountains. It also shows and counts the forests.
 
 **How it does it.** The tool runs the game's own random-map generator, taken from your installed `S4_Main.exe` and
 run in an emulator (Unicorn). So the map you see for a key is exactly the map the lobby will make for it. Each key
@@ -81,8 +81,8 @@ C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\games\thesettlers4
 
 | Mode | What it uses | Speed |
 | --- | --- | --- |
-| **Lobby preview** | Only what the lobby preview shows: water, land and mountain. Nothing about ore, stone, rivers or snow. Mountain and space are estimated from the 160×160 preview. | Fast: hundreds of keys per minute. |
-| **Full map** | Everything from lobby preview mode, plus what the preview hides: ore, stone fields, rivers and snow, measured tile by tile on the fully generated map. | Each map takes about 15 s to generate; only the best keys from the quick check are generated. |
+| **Lobby preview** | Only what the lobby preview shows: water, land and mountain. Nothing about ore, stone or rivers. Mountain and space are estimated from the 160×160 preview. The preview shows no snow, so snow is estimated from how deep inside a mountain the ground is: big mountains have snow on top. | Fast: hundreds of keys per minute. |
+| **Full map** | Everything from lobby preview mode, plus what the preview hides: ore, stone fields and rivers, and the real snow, measured tile by tile on the fully generated map. | Each map takes about 15 s to generate; only the best keys from the quick check are generated. |
 
 Each mode keeps its own list of found maps. Switch the mode before you start a search; it can't change while a
 search runs. The Scoring tab greys out the lines a mode doesn't use.
@@ -118,27 +118,36 @@ found in earlier runs that you haven't seen yet are shown first, instantly.
 - **This search / All found maps** (above the list): *This search* lists the maps from the current run. *All found
   maps* lists every map found so far for the current lobby settings, best first, including ones you've seen.
 - **Map cards:** preview, key and score. Click a card to show it on the right; **Copy** copies its key.
+- **Red ✕** (top left of a card): dismisses a map you don't like. It disappears from the list for good, in both
+  modes, and is never offered again; **Undo dismiss** below the list brings back the last ones dismissed.
+- **Copy all keys** (below the list): copies the keys of all listed maps, one per line.
 - **Big picture:** drawn like the in-game minimap: a slanted map, red circles for team 1 (P1–P3) and blue for team 2
   (P4–P6). In lobby preview mode it shows exactly what the lobby preview shows: water, land, mountain (grey) and
   desert. In full map mode it is the whole generated map.
 - **Show full details** (top right, full map mode only): off by default, so the full map looks like the lobby
-  preview would show it. Turn it on to also see what the preview hides: rivers in light blue, stone fields in grey,
-  and ore speckles on the mountains (dark = coal, red = iron, yellow = gold, pale yellow = sulfur, white = stone).
+  preview would show it. Turn it on to also see what the preview hides: rivers in light blue, forests in dark
+  green, stone fields in grey, and ore speckles on the mountains (dark = coal, red = iron, yellow = gold, pale
+  yellow = sulfur, white = stone). Maps found before forests were drawn show them only once checked again.
   It switches the big picture and the thumbnails.
+- **Show radii** (top right, both modes): faint circles around every castle for the Scoring tab's wide radius
+  (lighter shade) and close radius (darker shade), red for team 1 and blue for team 2. They show what the player areas
+  can take in at most: distances are walked over land, so water makes the real area smaller.
 - **Stats table**, one row per player plus a *weakest* row (the lowest value of each column). Lobby preview mode
-  shows the first five columns; full map mode shows all of them (scroll sideways if the window is narrow):
+  shows the first six columns; full map mode shows all of them (scroll sideways if the window is narrow):
 
   | Column | Meaning |
   | --- | --- |
-  | Space | Buildable land tiles in the player's area (in full map mode: grass flat enough to build on) |
-  | Space ≤150 | Buildable tiles within the close radius of the castle |
-  | Mountain | Mountain tiles in the player's area; in full map mode snow counts at the Scoring tab's snow factor (½ by default) |
-  | Mtn ≤150 | The same, within the close radius of the castle |
+  | Space | Buildable land in the player's area, in [blocks](#mountain-blocks) (in full map mode: grass flat enough to build on) |
+  | Space ≤3 | Buildable land within the close radius of the castle, in blocks |
+  | Mountain | Mountain in the player's area, in [blocks](#mountain-blocks) ("4.5 bl"); snow counts at the Scoring tab's snow factor (0 by default: not at all) |
+  | Mtn ≤3 | The same, within the close radius of the castle |
   | Fields | Separate mountain patches the player has (a patch shared by teammates counts once) |
-  | Snow | Snow tiles in the player's area (no ore under snow) |
+  | Snow | Snow in the player's area, in blocks (no ore under snow); estimated in lobby preview mode |
   | Gold, Coal, Iron, Stone ore, Sulfur | Tiles with that ore in the player's area |
-  | Stones, Stones ≤150 | Stone tiles to quarry (stone fields on the grass), in the area / within the close radius |
-  | River, River ≤150 | River tiles, in the area / within the close radius |
+  | Stones, Stones ≤3 | Stone tiles to quarry (stone fields on the grass), in the area / within the close radius |
+  | Trees, Trees ≤3 | Trees to cut, in the area / within the close radius (maps found before trees were counted show –) |
+  | River, River ≤3 | River tiles, in the area / within the close radius |
+  | Start stone, Start forest | ✓ if the player has a stone field / forest of their own next to the castle (see [Own start fields](#own-start-fields)); – = found before this was checked |
 
   In lobby preview mode the values are full-map tiles estimated from the small preview, so they are rougher.
 
@@ -151,6 +160,14 @@ Other buttons on the left:
   current mode and shown, which is handy for a key a friend sent you: from its lobby preview in a few seconds, or
   fully generated in about 15 s. The key's own lobby settings are used.
 - **Open data folder:** opens where the results of the current settings are stored.
+- **Why maps were rejected** (under the search status): for the maps that scored below the minimum, how often each
+  score line missed points, and how often it was the *only* thing in the way (full points on that line would have
+  been enough). For example, "Mountain: missed points 100 % · only reason 0.5 %" means every rejected map lost some
+  mountain points, but only 1 in 200 would have made it with full mountain points. The line with the highest second
+  number is the one to loosen first to find maps faster. In full map mode it also shows how many maps were dropped
+  for a missing own start field. The lines most in the way are shown in **red**, those also often in the way in
+  **orange**, and the Scoring tab colours its score lines the same way. Until some line has been the only thing in
+  the way, the colours go by the points each line cost.
 - **Forget seen maps:** makes maps you've already been shown for these settings eligible to be shown again.
 
 ## Scoring tab
@@ -161,21 +178,24 @@ then combined using their **weights**.
 
 Changing a target or weight re-scores all found maps immediately, so you can sort your maps by what matters to you.
 Changes also steer the next search: its quick check of each key uses the lobby preview lines.
-**Reset to defaults** restores the values below, which were calibrated on known-good league maps.
+**Reset to defaults** restores the values below. They are strict: on 3,000 random maps (6 players, 1024, land
+90 %, lobby preview score) about 1 in 750 scores 95 or more, 1 in 250 scores 90 or more and 1 in 33 scores 80 or
+more, so a search for 95+ maps takes a while.
 
 ### Player areas
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| **Wide radius** | 200 tiles | How far from the castle ground counts for a player at all. Everything further away is ignored. |
-| **Close radius** | 150 tiles | Used by the "close" lines and the ≤ columns: only ground within this distance of the castle. Mountain close to home is easier to use and defend. |
-| **Snow** | 0.5 | Full map mode only (the lobby preview doesn't show snow). How much a snow tile counts compared with plain rock, in every mountain line (Mountain, Mountain close, Mountain fairness). Big mountains have snow on top, and there is never ore under snow, so snow is worth less. 0.5 = a snow tile counts half; 0 = snow doesn't count at all; 1 = snow counts like rock. |
+| **Wide radius** | 4.5 blocks | How far from the castle (in block widths of 56 tiles, so 4.5 = 252 tiles) ground counts for a player: mountain, space, ore, stone fields, trees and river. Everything further away is ignored. |
+| **Close radius** | 3 blocks | Used by the "close" lines and the ≤ columns: only the player's own ground within this distance of the castle (ground closer to another player's castle is theirs, see [How it works](#player-areas-1)). Mountain close to home is easier to use and defend. |
+| **Snow** | 0 | How much a snow tile counts compared with plain rock, in every mountain line (Mountain, Mountain close, Mountain fairness). Big mountains have snow on top, and there is never ore under snow, so snow is worth less. 0 = snow doesn't count at all; 0.5 = a snow tile counts half; 1 = snow counts like rock. It works per tile, not per block: only the snow itself is left out, the rest of the mountain counts in full. In full map mode the snow tiles are exact; in lobby preview mode the snow is estimated (per preview pixel, ≈6×6 tiles), as the preview doesn't show it. Lower values punish snowy mountains more. Fields ignore snow whatever this is set to. |
 
 Distances are walking distances over land, not straight lines, so water in between makes ground count as further
 away.
 
 The snow factor re-scores maps instantly like a target or weight. Changing a radius changes the measurements themselves, so maps have to be generated again: a new search starts its
 own list. Maps found with each radius setting are kept separately, and switching back brings the old list back.
+Maps found while the radii were set in tiles (200 or 250 wide, 150 close) are kept on disk but no longer shown, as no block setting matches them exactly.
 
 ### Score lines
 
@@ -184,12 +204,12 @@ only.
 
 | Line | Default target | Default weight | What it measures |
 | --- | --- | --- | --- |
-| **Mountain** | 9,000 tiles | 30 | Mountain tiles in the weakest player's area. Mountain is where mines go, so this matters most. |
-| **Mountain, close** | 5,000 tiles | 15 | Mountain within the close radius of the weakest player's castle. |
-| **Space** | 40,000 tiles | 30 | Buildable land in the weakest player's area. |
-| **Space, close** | 30,000 tiles | 0 (off) | Buildable land within the close radius. |
-| **Mountain fairness** | 0.6 | 10 | Weakest player's mountain ÷ strongest player's mountain. 0.6 means full points if the weakest player has at least 60 % of what the strongest has. |
-| **Space fairness** | 0.6 | 5 | The same for building space. |
+| **Mountain** | 5.5 blocks | 30 | Mountain within the wide radius of the weakest player's castle, in [blocks](#mountain-blocks). Mountain is where mines go, so this matters most. |
+| **Mountain, close** | 3.5 blocks | 20 | Mountain within the close radius of the weakest player's castle. Mountain close to home is easier to use and defend. |
+| **Space** | 18 blocks | 10 | Buildable land in the weakest player's area. |
+| **Space, close** | 15 blocks | 10 | Buildable land within the close radius. |
+| **Mountain fairness** | 0.7 | 15 | Weakest player's mountain ÷ strongest player's mountain. 0.7 means full points if the weakest player has at least 70 % of what the strongest has. |
+| **Space fairness** | 0.7 | 15 | The same for building space. |
 | **Gold** | 150 tiles | 6 | *Full map.* Gold tiles in the weakest player's area. Gold counts most of the ores by default. |
 | **Coal** | 800 tiles | 5 | *Full map.* Coal tiles. |
 | **Iron** | 300 tiles | 3 | *Full map.* Iron tiles. |
@@ -203,32 +223,51 @@ only.
 The default ore, stone and river targets are about what the weakest player gets on a good map (measured on 120
 random maps).
 
+#### Own start fields
+
+The generator puts a stone field and a forest right next to every castle (10–30 tiles away). On some maps one
+is missing, or two teammates' castles are so close that they'd have to share one. With **Every player needs
+their own start stone field and forest** on (the default, full map mode only), such maps score 0: every player
+needs a stone field and a forest within 35 tiles of the castle that no other player needs too (a field big
+enough for two counts twice). About half of all random maps fail this, mostly through a missing stone field.
+
 - **Target:** the amount the weakest player needs for full points on that line. Below the target, points drop in
   proportion (half the target gives half the points); above it there is no bonus.
 - **Weight:** how much the line counts. Weights are relative: the score is the weighted average of the lines,
   so 30/30 is the same as 1/1. A weight of 0 turns the line off.
 - **Mountain keeps its share in full map mode.** Mountain matters most, so the three mountain lines (Mountain,
-  Mountain close, Mountain fairness) make up the same share of the score in both modes: 61 % with the defaults.
-  In full map mode, space and the full-map-only lines (ore, stone fields, river) split the remaining 39 % by their
+  Mountain close, Mountain fairness) make up the same share of the score in both modes: 65 % with the defaults.
+  In full map mode, space and the full-map-only lines (ore, stone fields, river) split the remaining 35 % by their
   weights. So the extra lines take their points from space, never from mountain; with the defaults, space gets
-  20 %, ore 10 %, stone fields 6 % and river 3 %.
-- **Scaling:** tile targets are meant for 1024×1024 with 6 players. For other settings they are scaled by the land
+  18 %, ore 9 %, stone fields 5 % and river 3 %.
+- **Scaling:** targets are meant for 1024×1024 with 6 players. For other settings they are scaled by the land
   available per player (a 512 map has a quarter of the area; 4 players get 1.5× as much each), so you don't need to
   change them when you switch settings.
 
 Examples:
 
-- *I want lots of mountain near my castle:* raise **Mountain, close** to 8,000 and its weight to 30.
+- *I want lots of mountain near my castle:* raise the **Mountain, close** weight to 30.
+- *Searches take too long:* loosen the line shown in red under the search status (for example **Mountain, close**
+  to 3 blocks).
 - *Gold matters even more for my games:* raise the **Gold** weight to 10–15.
 - *Ore doesn't matter, only the layout:* use lobby preview mode, or set the ore weights to 0.
 - *I only care that it's fair:* raise both fairness weights and lower the others.
 
+### Mountain blocks
+
+The generator lays the map out on a grid of square blocks, 56×56 tiles each: the squares you see in the lobby
+preview. Mountain and space are counted in blocks, the way players talk about a map: one mountain block on its own
+is a small mountain, two side by side a bar, and 2×2 a big square. A block of land is 3,136 tiles; a mountain block
+holds about 2,800 mountain tiles (its foot included), as a mountain doesn't fill its block completely. The default
+target of 5.5 blocks means the weakest player needs about five and a half blocks' worth of mountain (snow not
+counted) within 4.5 blocks. A *field* in the stats table is a separate mountain, of any number of blocks.
+
 ## How it works
 
 1. **Quick check** (well under 1 s per key per core). The tool runs the generator's first step and the 160×160
-   lobby preview, splits the land between the players, and estimates mountain and space for each in full-map tiles.
-   This is the lobby preview score. In **lobby preview mode** this is the map's score, and keys at or above the
-   minimum score are shown right away.
+   lobby preview, splits the land between the players, and estimates mountain, snow and space for each in full-map
+   tiles. This is the lobby preview score. In **lobby preview mode** this is the map's score, and keys at or above
+   the minimum score are shown right away.
 2. **Full generation** (full map mode; about 15 s per map, many in parallel) for the top 3 % of keys by quick check.
    The full 1024×1024 map is generated, every player's area is measured tile by tile (mountain, snow, ore, stone,
    rivers), and the map is scored and drawn.
@@ -242,7 +281,11 @@ maps), but it can't see ore, stone, rivers or snow, and the preview is a slightl
 
 On a mirrored map the mirror axis is the front line: enemies can't build on your half. Each team gets its side of the
 axis, and within it every tile goes to the **nearest teammate** (walking over land). A mountain between two teammates
-is split between them, and **no tile counts for two players**. A mountain patch counts as a *field* for the teammate
+is split between them, and **no tile counts for two players**. The radii are applied after this split: a player's
+wide and close lines only count their own tiles. A mountain inside your close radius that is even closer to a
+teammate's castle is the teammate's, so it counts for neither your close nor your wide mountain; the other way
+round, your close mountain can't count for anyone else's wide mountain. (Your close mountain is part of your own
+wide mountain, as the close circle lies inside the wide one.) A mountain patch counts as a *field* for the teammate
 who holds most of it, and for a second teammate only if they hold at least 40 % of it. Only mineable mountain (not
 snow) counts toward the size of a field. On maps without a single mirror axis, every tile goes to the nearest castle.
 
@@ -254,19 +297,17 @@ snow as *snow*.
 
 ### Calibration
 
-The default score was calibrated on known-good league keys (6 players, 1024, land 90 %, minerals higher, short
-diagonal):
+Known-good league keys (6 players, 1024, land 90 %, minerals higher, short diagonal) with the default score:
 
-| Key | Full map | Lobby preview |
-| --- | --- | --- |
-| LSGUKDC0 | 99 | 96 |
-| LSG5JJE0 | 100 | 99 |
-| LSGFG8O0 | 93 | 85 |
-| LSG2NBQ0 | 90 | 90 |
-| LSGKKUJ0 | 91 | 72 |
-| LSG2H840 | 67 (P2/P5 are short on mountain) | 56 |
+| Key | Full map | Lobby preview | Weakest player's mountain (snow not counted) |
+| --- | --- | --- | --- |
+| LSGUKDC0 | 91 | 86 | 4.5 blocks |
+| LSG5JJE0 | 81 | 80 | 3.5 blocks |
+| LSGFG8O0 | 72 | 61 | 3.7 blocks |
+| LSG2NBQ0 | 69 | 64 | 2.9 blocks |
+| LSGKKUJ0 | 73 | 56 | 3.4 blocks |
+| LSG2H840 | 55 (P2/P5 are short on mountain) | 43 | 2.6 blocks |
 
-Typical bad random maps score 20–60.
 
 ## Where data is stored
 

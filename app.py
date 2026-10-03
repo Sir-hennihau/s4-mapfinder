@@ -1,7 +1,7 @@
 """S4 Map Finder — desktop UI."""
 import json, multiprocessing, os, queue, sys, time
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, font as tkfont
 
 from PIL import Image, ImageTk
 
@@ -22,11 +22,18 @@ MODES = {"preview": "Lobby preview", "full": "Full map"}
 STAT_COLS = [("space", "Space"), ("space_near", "Space ≤{near}"), ("mtn", "Mountain"), ("mtn_near", "Mtn ≤{near}"),
              ("fields", "Fields"), ("snow", "Snow"), ("gold", "Gold"), ("coal", "Coal"), ("iron", "Iron"),
              ("stone", "Stone ore"), ("sulfur", "Sulfur"), ("stonefield", "Stones"), ("stonefield_near", "Stones ≤{near}"),
-             ("river", "River"), ("river_near", "River ≤{near}")]
-PREVIEW_COLS = ["space", "space_near", "mtn", "mtn_near", "fields"]  # all the lobby preview shows
+             ("forest", "Trees"), ("forest_near", "Trees ≤{near}"), ("river", "River"), ("river_near", "River ≤{near}"),
+             ("own_stone", "Start stone"), ("own_forest", "Start forest")]
+PREVIEW_COLS = ["space", "space_near", "mtn", "mtn_near", "fields", "snow"]  # all the lobby preview shows
+BLOCK_COLS = dict(mtn=analyze.BLOCK_TILES, mtn_near=analyze.BLOCK_TILES, snow=analyze.BLOCK_TILES,  # in blocks,
+                  space=analyze.SPACE_BLOCK_TILES, space_near=analyze.SPACE_BLOCK_TILES)  # like the targets
+LATER_COLS = ("forest", "forest_near", "own_stone", "own_forest")  # not measured on maps found earlier
+YES_NO = ("own_stone", "own_forest")  # 1 = has a start field of their own
+WORST_MAX = ("snow",)  # columns where more is worse: the weakest player has the most
+TEAM_COLORS = ("#c62828", "#1e4fc4")  # player names: the two mirror sides
 # score lines on the Scoring tab: (line, label, spinbox increment for the target)
-SCORE_ROWS = [("mtn", "Mountain", 500), ("mtn_near", "Mountain, close", 500), ("space", "Space", 1000),
-              ("space_near", "Space, close", 1000), ("fair_mtn", "Mountain fairness", 0.05),
+SCORE_ROWS = [("mtn", "Mountain (blocks)", 0.5), ("mtn_near", "Mountain, close (blocks)", 0.5),
+              ("space", "Space (blocks)", 1), ("space_near", "Space, close (blocks)", 1), ("fair_mtn", "Mountain fairness", 0.05),
               ("fair_space", "Space fairness", 0.05),
               ("gold", "Gold", 25), ("coal", "Coal", 50), ("iron", "Iron", 50), ("stone", "Stone ore", 25),
               ("sulfur", "Sulfur", 25), ("stonefield", "Stone fields", 50), ("stonefield_near", "Stone fields, close", 25),
@@ -35,21 +42,80 @@ LEGEND = {
     "preview": (
         "Lobby preview mode: maps are scored only from what the game's lobby preview shows (water, land, mountain), "
         "the way players have always judged a key. A player's area is their side of the mirror axis, shared with "
-        "teammates by distance (each tile counts for one player), up to the wide radius. Space = buildable land, "
-        "Mountain = mountain tiles, “≤ n” = only within n tiles of the castle, Fields = separate mountain patches "
-        "(a shared patch counts once). Values are full-map tiles estimated from the preview. "
-        "Red P1–P3 / blue P4–P6 are the two mirror sides."),
+        "teammates by distance (each tile counts for one player), up to the wide radius. Space = buildable land in "
+        "blocks (56×56 tiles), "
+        "Mountain = mountain in blocks, the squares mountains are built from (56×56 tiles, ≈2,800 mountain tiles; "
+        "snow weighted by the Scoring tab's snow factor, as it has no ore), Snow = snow in blocks, estimated from "
+        "how deep inside a mountain the ground is (the preview shows no snow, but big mountains have it on top), "
+        "“≤ n” = only within n blocks of the castle, Fields = separate mountain patches (a shared patch counts once). "
+        "Values are full-map amounts estimated from the preview. "
+        "Red P1–P3 / blue P4–P6 are the two mirror sides; the faint circles are the wide and close radius."),
     "full": (
         "Full map mode: maps are generated completely and also scored on what the lobby preview hides. "
         "A player's area is their side of the mirror axis, shared with teammates by distance (each tile counts for "
-        "one player), up to the wide radius. Space = buildable grass, Mountain = mountain tiles (snow weighted by the "
-        "Scoring tab's snow factor, as it has no ore), Snow = snow tiles, “≤ n” = only within n tiles of the castle, "
+        "one player), up to the wide radius. Space = buildable grass in blocks (56×56 tiles), Mountain = mountain in blocks, the squares "
+        "mountains are built from (56×56 tiles, ≈2,800 mountain tiles; snow weighted by the Scoring tab's snow factor, "
+        "as it has no ore), Snow = snow in blocks, “≤ n” = only within n blocks of the castle, "
         "Fields = separate mountain patches. Gold … Sulfur = tiles with that ore, Stones = stone tiles to quarry, "
-        "River = river tiles. The picture looks like the lobby preview; “Show full details” adds rivers (light "
-        "blue), stone fields (grey) and ore speckles on the mountains: dark = coal, red = iron, yellow = gold, "
-        "pale yellow = sulfur, white = stone. Red P1–P3 / blue P4–P6 are the two mirror sides."),
+        "Trees = trees to cut (– = found before trees were counted), River = river tiles. The picture looks like "
+        "the lobby preview; “Show full details” adds rivers (light blue), forests (dark green), stone fields (grey) "
+        "and ore speckles on the mountains: dark = coal, red = iron, yellow = gold, "
+        "pale yellow = sulfur, white = stone. Red P1–P3 / blue P4–P6 are the two mirror sides; the faint circles "
+        "are the wide and close radius."),
 }
 THUMB = (210, 140)
+
+
+class StatTable(ttk.Frame):
+    """The per-player stats. Drawn on a canvas, as a Treeview can only colour whole rows, not single cells."""
+
+    def __init__(self, master, k):
+        super().__init__(master)
+        self.rh, self.w0, self.wc, self.pad = int(22 * k), int(70 * k), int(68 * k), int(6 * k)
+        self.font, self.hfont = tkfont.nametofont("TkDefaultFont"), tkfont.nametofont("TkHeadingFont")
+        self.cv = tk.Canvas(self, bg="white", highlightthickness=1, highlightbackground="#d9d9d9")
+        xs = ttk.Scrollbar(self, orient="horizontal", command=self.cv.xview)
+        self.cv.configure(xscrollcommand=xs.set)
+        self.cv.grid(row=0, column=0, sticky="ew"); xs.grid(row=1, column=0, sticky="ew")
+        self.columnconfigure(0, weight=1)
+        self.cols, self.heads, self.rows = [], {"#0": "Player"}, []
+        self.cv.bind("<Configure>", lambda e: self._draw())
+
+    def headings(self, heads):
+        self.heads.update(heads); self._draw()
+
+    def show(self, cols):
+        self.cols = list(cols); self._draw()
+
+    def fill(self, rows):
+        """rows: (name, name colour, {column: (text, colour)})"""
+        self.rows = rows; self._draw()
+
+    def _draw(self):
+        cv, rh, pad = self.cv, self.rh, self.pad
+        cv.delete("all")
+        w = [self.w0] + [max(self.wc, self.hfont.measure(self.heads.get(c, "")) + 2 * pad) for c in self.cols]
+        extra = cv.winfo_width() - 2 - sum(w)
+        if extra > 0 and self.cols:  # stretch the value columns to fill the width
+            w = w[:1] + [x + extra // len(self.cols) for x in w[1:]]
+        h = rh * (1 + max(8, len(self.rows)))
+        if int(cv.cget("height")) != h:
+            cv.configure(height=h)
+        cv.configure(scrollregion=(0, 0, sum(w), h))
+        cv.create_rectangle(0, 0, sum(w), rh, fill="#f7f7f7", outline="")
+        cv.create_line(0, rh - 1, sum(w), rh - 1, fill="#e0e0e0")
+        x = 0
+        for c, cw in zip(["#0"] + self.cols, w):
+            cv.create_text(x + cw / 2, rh / 2, text=self.heads.get(c, ""), font=self.hfont)
+            cv.create_line(x + cw - 1, 3, x + cw - 1, rh - 3, fill="#e0e0e0")
+            for j, (name, color, cells) in enumerate(self.rows):
+                y = rh * (j + 1.5)
+                if c == "#0":
+                    cv.create_text(x + pad, y, text=name, fill=color, anchor="w", font=self.font)
+                else:
+                    t, col = cells.get(c, ("", "black"))
+                    cv.create_text(x + cw - pad, y, text=t, fill=col, anchor="e", font=self.font)
+            x += cw
 
 
 def load_config():
@@ -100,8 +166,9 @@ class App:
         st.configure("CardKey.TLabel", font=("Consolas", 13, "bold"))
         st.configure("Score.TLabel", font=("Segoe UI", 11, "bold"), foreground="#b07800")
         st.configure("Muted.TLabel", foreground="#666")
+        st.configure("Red.TLabel", foreground="#c62828")  # score lines most in the way of finds
+        st.configure("Orange.TLabel", foreground="#d97000")
         st.configure("Big.TButton", font=("Segoe UI", 11, "bold"), padding=6)
-        st.configure("Treeview", rowheight=int(22 * self.k))
 
     def _build(self):
         r = self.root
@@ -152,7 +219,7 @@ class App:
 
         se = ttk.LabelFrame(tab, text="Search", padding=10)
         se.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-        self.v_want = tk.StringVar(value=str(c.get("want", 20)))
+        self.v_want = tk.StringVar(value=str(c.get("want", 5)))
         self.v_minscore = tk.StringVar(value=str(c.get("min_score", 95)))
         self.v_workers = tk.StringVar(value=str(c.get("workers", max(1, multiprocessing.cpu_count() - 1))))
         for i, (t, w, hint) in enumerate([
@@ -170,6 +237,9 @@ class App:
         self.pbar = ttk.Progressbar(side, mode="determinate"); self.pbar.grid(row=6, column=0, columnspan=2, sticky="ew")
         self.l_status = ttk.Label(side, text="", wraplength=int(270 * self.k), justify="left")
         self.l_status.grid(row=7, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        rej = ttk.Frame(side); rej.grid(row=8, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        self.reject_lbls = [ttk.Label(rej, text="", style="Muted.TLabel", wraplength=int(270 * self.k), justify="left")
+                            for _ in range(8)]
 
         ck = ttk.LabelFrame(tab, text="Check a map key", padding=10)
         ck.grid(row=3, column=0, sticky="ew", pady=(10, 0))
@@ -191,6 +261,12 @@ class App:
         ttk.Radiobutton(top, text="This search", value="new", variable=self.v_view, command=self._load_list).pack(side="left")
         ttk.Radiobutton(top, text="All found maps", value="all", variable=self.v_view, command=self._load_list).pack(side="left", padx=8)
         self.l_count = ttk.Label(top, text="", style="Muted.TLabel"); self.l_count.pack(side="right")
+        bar = ttk.Frame(mid); bar.pack(side="bottom", fill="x", pady=(6, 0))
+        self.b_copy_all = ttk.Button(bar, text="Copy all keys", command=self._copy_all, state="disabled")
+        self.b_copy_all.pack(side="left")
+        self.b_undo = ttk.Button(bar, text="Undo dismiss", command=self._undo_dismiss, state="disabled")
+        self.b_undo.pack(side="left", padx=(6, 0))
+        self.undo = []  # (store, row) of dismissed maps, last first out
         wrap = ttk.Frame(mid); wrap.pack(fill="both", expand=True, pady=(6, 0))
         self.lc = tk.Canvas(wrap, width=self.thumb[0] * 2 + int(40 * self.k), highlightthickness=0, bg="#f3f3f3")
         sb = ttk.Scrollbar(wrap, orient="vertical", command=self.lc.yview)
@@ -214,19 +290,16 @@ class App:
         self.c_details = ttk.Checkbutton(hdr, text="Show full details", variable=self.v_details,
                                          command=self._toggle_details)
         self.c_details.pack(side="right")
+        # wide / close radius around every castle, to see what the Scoring tab's radii take in
+        self.v_radii = tk.BooleanVar(value=c.get("show_radii", True))
+        ttk.Checkbutton(hdr, text="Show radii", variable=self.v_radii, command=self._show_big).pack(side="right", padx=12)
         self.l_info = ttk.Label(det, text="", style="Muted.TLabel"); self.l_info.grid(row=1, column=0, sticky="w")
         self.big = tk.Label(det, bg="#121212", text="Press “Find new maps” to start.", fg="#aaa", font=("Segoe UI", 12))
         self.big.grid(row=2, column=0, sticky="nsew", pady=8)
         self.big.bind("<Configure>", lambda e: self._show_big())
-        self.tree = ttk.Treeview(det, columns=[k for k, _ in STAT_COLS], height=8)
-        self.tree.heading("#0", text="Player"); self.tree.column("#0", width=int(70 * self.k), anchor="w")
-        for k, t in STAT_COLS:
-            self.tree.column(k, width=int(68 * self.k), minwidth=int(52 * self.k), anchor="e", stretch=True)
-        self._headings(analyze.DEFAULT_PARAMS["near"])
-        self.tree.tag_configure("t1", foreground="#c62828"); self.tree.tag_configure("t2", foreground="#1e4fc4")
-        self.tree.grid(row=3, column=0, sticky="ew")
-        xs = ttk.Scrollbar(det, orient="horizontal", command=self.tree.xview)
-        self.tree.configure(xscrollcommand=xs.set); xs.grid(row=4, column=0, sticky="ew")
+        self.stats = StatTable(det, self.k)
+        self._headings(analyze.radii(analyze.DEFAULT_PARAMS)["near"])
+        self.stats.grid(row=3, column=0, sticky="ew")
         self.legend = legend = ttk.Label(det, style="Muted.TLabel", justify="left")
         legend.grid(row=5, column=0, sticky="ew", pady=(6, 0))
         legend.bind("<Configure>", lambda e: legend.configure(wraplength=e.width - 8))
@@ -261,27 +334,27 @@ class App:
         else:  # nothing found in this mode yet: don't leave the other mode's map on screen
             self.l_key.configure(text=""); self.l_score.configure(text=""); self.l_info.configure(text="")
             self.b_copy.configure(state="disabled")
-            self.tree.delete(*self.tree.get_children())
+            self.stats.fill([])
             self._big_src = None
             self.big.configure(image="", text="Press “Find new maps” to start.")
 
     def _mode_ui(self):
-        """Show what the current mode uses: preview mode has no mines, stones, rivers or snow."""
+        """Show what the current mode uses: preview mode has no mines, stones or rivers (snow is estimated)."""
         mode = self.v_mode.get()
         full = mode == "full"
         self.l_mode.configure(text=(
             "Fully generates the best maps (~15 s each) and also scores ore, stone, rivers and snow."
-            if full else "Scores only what the game's lobby preview shows: water, land and mountain. Fast."))
+            if full else "Scores only what the game's lobby preview shows: water, land and mountain "
+                         "(snow on big mountains estimated). Fast."))
         self.c_details.configure(state="normal" if full else "disabled")
-        self.tree.configure(displaycolumns=[k for k, _ in STAT_COLS] if full else PREVIEW_COLS)
+        self.stats.show([k for k, _ in STAT_COLS] if full else PREVIEW_COLS)
         self.legend.configure(text=LEGEND[mode])
         used = set(analyze.lines_for(mode))
         for line, (lbl, ws) in self.score_widgets.items():
-            on = line in used
-            lbl.configure(style="TLabel" if on else "Muted.TLabel")
             for w in ws:
-                w.configure(state="normal" if on else "disabled")
-        self.snow_spin.configure(state="normal" if full else "disabled")
+                w.configure(state="normal" if line in used else "disabled")
+        self._color_lines()
+        self.c_start.configure(state="normal" if full else "disabled")
         self.l_full.configure(text="Full map only" if full else "Full map only (not used in lobby preview mode)")
 
     # ------------------------------------------------------------------ scoring tab
@@ -290,20 +363,22 @@ class App:
         self.v_par = {k: tk.StringVar(value=str(v)) for k, v in P.items()}
         wrap = int(250 * self.k)
         ar = ttk.LabelFrame(tab, text="Player areas", padding=10); ar.grid(row=0, column=0, sticky="ew")
-        for i, (k, t) in enumerate([("radius", "Wide radius"), ("near", "Close radius")]):
+        for i, (k, t, hint) in enumerate([("radius", "Wide radius", "blocks from the castle"),
+                                          ("near", "Close radius", "blocks from the castle")]):
             ttk.Label(ar, text=t).grid(row=i, column=0, sticky="w", pady=2)
-            ttk.Spinbox(ar, from_=20, to=600, increment=10, textvariable=self.v_par[k], width=7).grid(
+            ttk.Spinbox(ar, from_=0.5, to=10, increment=0.5, textvariable=self.v_par[k], width=7).grid(
                 row=i, column=1, sticky="w", padx=(8, 4), pady=2)
-            ttk.Label(ar, text="tiles from the castle", style="Muted.TLabel").grid(row=i, column=2, sticky="w")
+            ttk.Label(ar, text=hint, style="Muted.TLabel").grid(row=i, column=2, sticky="w")
         ttk.Label(ar, text="Snow").grid(row=2, column=0, sticky="w", pady=2)
-        self.snow_spin = ttk.Spinbox(ar, from_=0, to=1, increment=0.1, textvariable=self.v_par["snow"], width=7)
-        self.snow_spin.grid(row=2, column=1, sticky="w", padx=(8, 4), pady=2)
+        ttk.Spinbox(ar, from_=0, to=1, increment=0.1, textvariable=self.v_par["snow"], width=7).grid(
+            row=2, column=1, sticky="w", padx=(8, 4), pady=2)
         ttk.Label(ar, text="× rock (no ore)", style="Muted.TLabel").grid(row=2, column=2, sticky="w")
 
         sc = ttk.LabelFrame(tab, text="Score lines", padding=10); sc.grid(row=1, column=0, sticky="ew", pady=(10, 0))
         for j, t in enumerate(("Lobby preview", "Target", "Weight")):
             ttk.Label(sc, text=t, style="Muted.TLabel").grid(row=0, column=j, sticky="w", padx=(0 if j == 0 else 8, 0))
         self.score_widgets = {}
+        self.greed = {}  # line -> label style from the last search's rejection stats
         i = 1
         for line, label, inc in SCORE_ROWS:
             if line not in analyze.PREVIEW_LINES and not hasattr(self, "l_full"):
@@ -316,8 +391,13 @@ class App:
             w = ttk.Spinbox(sc, from_=0, to=100, increment=1, textvariable=self.v_par["w_" + line], width=4)
             w.grid(row=i, column=2, sticky="w", padx=(8, 0), pady=1)
             self.score_widgets[line] = (lbl, (t, w)); i += 1
+        self.c_start = ttk.Checkbutton(sc, text="Every player needs their own start stone field and forest",
+                                       variable=self.v_par["own_start"], onvalue="1", offvalue="0")
+        self.c_start.grid(row=i, column=0, columnspan=3, sticky="w", pady=(4, 0)); i += 1
         ttk.Label(sc, style="Muted.TLabel", wraplength=wrap, justify="left", text=(
-            "Target = what the weakest player needs for full points (tiles, for 1024 and 6 players; scaled otherwise). "
+            "Target = what the weakest player needs for full points (for 1024 and 6 players; scaled otherwise). "
+            f"Mountain and space in blocks (the preview's 56×56 squares; a mountain block ≈{analyze.BLOCK_TILES:,} "
+            "mountain tiles), the rest in tiles. "
             "Fairness = weakest ÷ strongest. Weights are relative, 0 = off. In full map mode the mountain lines "
             "keep the share they have in lobby preview mode; space and the full-map lines split the rest.")).grid(
             row=i, column=0, columnspan=3, sticky="w", pady=(4, 0))
@@ -340,12 +420,12 @@ class App:
                 raise ValueError(f"“{v.get()}” is not a number") from None
             if out[k] < 0:
                 raise ValueError("Values can't be negative")
-        if not 20 <= out["radius"] <= 600:
-            raise ValueError("Wide radius must be between 20 and 600 tiles")
+        if not 0.5 <= out["radius"] <= 10:
+            raise ValueError("Wide radius must be between 0.5 and 10 blocks")
         if out["snow"] > 1:
             raise ValueError("Snow must be between 0 and 1 (1 = as good as rock)")
-        if not 10 <= out["near"] <= out["radius"]:
-            raise ValueError("Close radius must be between 10 tiles and the wide radius")
+        if not 0.2 <= out["near"] <= out["radius"]:
+            raise ValueError("Close radius must be between 0.2 blocks and the wide radius")
         if not any(out["w_" + k] > 0 for k in analyze.lines_for(self.v_mode.get())):
             raise ValueError("At least one weight of this mode's lines must be above 0")
         if any(out["t_" + k] <= 0 for k in analyze.LINES):
@@ -361,7 +441,7 @@ class App:
     def _params_note(self, P):
         changed = engine.geo(P) != engine.geo(None)
         self.l_par.configure(foreground="#666", text=(
-            "Other radii than 200 / 150: maps are generated again (kept separately per radius)." if changed else
+            "Other radii than the defaults: maps are generated again (kept separately per radius)." if changed else
             "Found maps are re-scored right away."))
 
     def _reset_params(self):
@@ -388,7 +468,7 @@ class App:
             self._load_list()
         else:  # this search's maps: re-score those measured with the same radii
             for r in self.rows:
-                if r.get("geo", engine.geo(None)) == engine.geo(P):
+                if engine.row_geo(r) == engine.geo(P):
                     r["score"] = engine.rescore(r["key"], r["players"], P, r.get("mode", "full"))
             self._sort_rows(); self._render_list()
         if self.selected:
@@ -414,7 +494,7 @@ class App:
         cfg = dict(game_dir=self.v_game.get(), players=s["players"], size=s["size"], land=s["land"],
                    minerals_name=self.v_min.get(), mirror_name=self.v_mirror.get(),
                    want=self.v_want.get(), min_score=self.v_minscore.get(), workers=self.v_workers.get(),
-                   mode=self.v_mode.get(),
+                   mode=self.v_mode.get(), show_radii=self.v_radii.get(),
                    score_params=self._valid_params(),
                    geometry=self.root.geometry() if self.root.state() != "zoomed" else "")
         os.makedirs(HOME, exist_ok=True)
@@ -440,6 +520,9 @@ class App:
         self.store = None
         st = self._store()
         self.v_view.set("new"); self.rows = []; self._render_list()
+        self.greed = {}; self._color_lines()
+        for l in self.reject_lbls:
+            l.grid_remove()
         self.search = engine.Search(os.path.join(self.v_game.get(), "S4_Main.exe"), st, want, min_score,
                                     workers, self.events)
         self.search.start()
@@ -456,6 +539,47 @@ class App:
             f"Seeds checked: {p['scanned']:,}{gen}\n"
             f"{p['phase'].capitalize()} · {int(el // 60)}:{int(el % 60):02d}"))
         self.pbar.configure(value=p["found"])
+        rows = self._reject_rows(p)
+        for j, l in enumerate(self.reject_lbls):
+            if j < len(rows):
+                l.configure(text=rows[j][0], style=rows[j][1]); l.grid(row=j, column=0, sticky="w")
+            else:
+                l.grid_remove()
+        self._color_lines()
+
+    def _reject_rows(self, p):
+        """What kept the scored maps below the minimum score, to see which target to loosen: (text, style) rows.
+        Red = the line most often alone in the way (and any close to it), orange = also often in the way. Until
+        some line has been alone in the way, by the points each line cost."""
+        self.greed = {}
+        n = p.get("rejected", 0)
+        if not n:
+            return []
+        names = {line: label.replace(" (blocks)", "") for line, label, _ in SCORE_ROWS}
+        what = "fully generated maps" if self.search and self.search.store.mode == "full" else "checked seeds"
+        out = [(f"{n:,} {what} below the minimum. Per score line, the share of them that missed points on it, "
+                "and the share it alone kept below the minimum (full points there would have been enough: loosen "
+                "that line first). Red = most in the way, orange = also a lot.", "Muted.TLabel")]
+        if p.get("no_start"):
+            out.append((f"No own start stone/forest: {100 * p['no_start'] / n:.0f} %", "Muted.TLabel"))
+        only = p["only"]
+        by = only if any(only.values()) else p.get("lost", {})
+        top = max(by.values(), default=0)
+        for k in sorted(p["short"], key=lambda k: (-only.get(k, 0), -by.get(k, 0)))[:6]:
+            o, g = only.get(k, 0), by.get(k, 0)
+            style = ("Red.TLabel" if top and g >= 0.6 * top else "Orange.TLabel" if top and g >= 0.25 * top
+                     else "Muted.TLabel")
+            if style != "Muted.TLabel":
+                self.greed[k] = style
+            out.append((f"{names.get(k, k)}: missed points {100 * p['short'][k] / n:.0f} % · only reason {100 * o / n:.1f} %", style))
+        return out
+
+    def _color_lines(self):
+        """Score line labels on the Scoring tab: muted when the mode doesn't use them, else red/orange like the
+        last search's rejection stats."""
+        used = set(analyze.lines_for(self.v_mode.get()))
+        for line, (lbl, ws) in self.score_widgets.items():
+            lbl.configure(style=self.greed.get(line, "TLabel") if line in used else "Muted.TLabel")
 
     def _poll(self):
         try:
@@ -464,9 +588,10 @@ class App:
                 if ev == "progress":
                     self._status(data)
                 elif ev == "found":
-                    if self.v_view.get() == "new" and self.search and self.store is self.search.store:
+                    if (self.v_view.get() == "new" and self.search and self.store is self.search.store
+                            and data["key"] not in self.store.dismissed):
                         self.rows.append(data); self._add_card(data, len(self.rows) - 1)
-                        self.l_count.configure(text=f"{len(self.rows)} maps")
+                        self._count()
                         if self.selected is None:
                             self._select(data)
                 elif ev == "done":
@@ -509,7 +634,7 @@ class App:
         st = self._store()
         if messagebox.askyesno(APP, f"Forget the {len(st.shown)} maps you've already been shown for these settings?\n"
                                     "They can then be shown again in future searches."):
-            st.shown.clear(); st.save(); self._load_list()
+            st.shown.clear(); st.shown |= st.dismissed; st.save(); self._load_list()
 
     # ------------------------------------------------------------------ list
     def _sort_rows(self):
@@ -527,19 +652,58 @@ class App:
             self.rows = []
         self._render_list()
 
-    def _render_list(self):
+    def _render_list(self, keep_scroll=False):
+        top = self.lc.yview()[0]
         for w in self.lf.winfo_children():
             w.destroy()
         self.cards = {}; self.card_imgs = {}
         for i, r in enumerate(self.rows):
             self._add_card(r, i)
-        n = len(self.rows)
-        self.l_count.configure(text=f"{n} maps" if n else "")
+        n = self._count()
         if not n and self.v_view.get() == "new":
             tk.Label(self.lf, text="New maps appear here while searching.\n\n"
                                    "“All found maps” lists every map\nfound so far for these settings.",
                      bg="#f3f3f3", fg="#777", justify="left", font=("Segoe UI", 10)).grid(padx=16, pady=16)
-        self.lc.yview_moveto(0)
+        if keep_scroll:
+            self.lf.update_idletasks(); self.lc.configure(scrollregion=self.lc.bbox("all"))
+        self.lc.yview_moveto(top if keep_scroll else 0)
+
+    def _count(self):
+        n = len(self.rows)
+        self.l_count.configure(text=f"{n} maps" if n else "")
+        self.b_copy_all.configure(state="normal" if n else "disabled")
+        return n
+
+    def _dismiss(self, r):
+        """Throw a map out of the list for good (Undo dismiss brings it back)."""
+        st = self._store()
+        st.dismiss(r["key"])
+        self.undo.append((st, r)); self.b_undo.configure(state="normal")
+        i = next((j for j, x in enumerate(self.rows) if x["key"] == r["key"]), None)
+        if i is not None:
+            del self.rows[i]
+        if self.selected and self.selected["key"] == r["key"]:
+            self.selected = None
+            if self.rows:
+                self._select(self.rows[min(i or 0, len(self.rows) - 1)])
+        self._render_list(keep_scroll=True)
+        self.l_status_flash(f"Dismissed {r['key']}.")
+
+    def _undo_dismiss(self):
+        if not self.undo:
+            return
+        st, r = self.undo.pop()
+        st.dismiss(r["key"], False)
+        self.b_undo.configure(state="normal" if self.undo else "disabled")
+        if st is self._store() and all(x["key"] != r["key"] for x in self.rows):
+            self.rows.append(r); self._sort_rows(); self._render_list(keep_scroll=True)
+        self._select(r)
+        self.l_status_flash(f"{r['key']} is back.")
+
+    def _copy_all(self):
+        keys = [r["key"] for r in self.rows]
+        self.root.clipboard_clear(); self.root.clipboard_append("\n".join(keys)); self.root.update()
+        self.l_status_flash(f"Copied {len(keys)} map keys, one per line.")
 
     def _thumb(self, r):
         key, mode = r["key"], r.get("mode", "full")
@@ -573,6 +737,9 @@ class App:
         f = tk.Frame(self.lf, bg="white", highlightthickness=2, highlightbackground="white", cursor="hand2")
         f.grid(row=i // 2, column=i % 2, padx=6, pady=6, sticky="n")
         img = tk.Label(f, image=self._thumb(r), bg="white", bd=0); img.pack()
+        x = tk.Label(f, text="✕", font=("Segoe UI", 10, "bold"), fg="white", bg="#d32f2f", padx=4, cursor="hand2")
+        x.place(in_=img, x=4, y=4)
+        x.bind("<Button-1>", lambda e, rr=r: self._dismiss(rr))
         self.card_imgs[key] = (img, r)
         row = tk.Frame(f, bg="white"); row.pack(fill="x", padx=6, pady=4)
         tk.Label(row, text=key, font=("Consolas", 12, "bold"), bg="white").pack(side="left")
@@ -610,21 +777,28 @@ class App:
         self.l_info.configure(text=f"{d['players']} players · {d['size']}×{d['size']} · land {d['land']}% · "
                                    f"minerals {minr.lower()} · mirror {mir.lower()} · seed {d['seed']}")
         self._load_big(r)
-        self._headings(r.get("geo", engine.geo(None))["near"])
+        self._headings(engine.row_geo(r)["near"])
         full = r.get("mode", "full") == "full"
-        self.tree.configure(displaycolumns=[k for k, _ in STAT_COLS] if full else PREVIEW_COLS)
-        self.tree.delete(*self.tree.get_children())
+        self.stats.show([k for k, _ in STAT_COLS] if full else PREVIEW_COLS)
         # mountain columns as scored: snow weighted by the Scoring tab's snow factor
         per = [analyze.effective(p, self._valid_params()) for p in r["players"]]; half = len(per) // 2
-        for i, p in enumerate(per):
-            self.tree.insert("", "end", text=f"P{i + 1}", values=[f"{round(p.get(k, 0)):,}" for k, _ in STAT_COLS],
-                             tags=("t1" if i < half else "t2",))
-        mins = {k: min(p.get(k, 0) for p in per) for k, _ in STAT_COLS}
-        self.tree.insert("", "end", text="weakest", values=[f"{round(mins[k]):,}" for k, _ in STAT_COLS])
+        fmt = lambda k, v: ("–" if v is None else ("✓" if v else "✗") if k in YES_NO
+                            else f"{v / BLOCK_COLS[k]:.1f} bl" if k in BLOCK_COLS else f"{round(v):,}")
+        val = lambda p, k: p.get(k, None if k in LATER_COLS else 0)  # maps found earlier lack the newer columns
+        worst = {k: None if val(per[0], k) is None else (max if k in WORST_MAX else min)(val(p, k) for p in per)
+                 for k, _ in STAT_COLS}
+        texts = [{k: fmt(k, val(p, k)) for k, _ in STAT_COLS} for p in per]
+        # the weakest player(s) of each column in red, as shown (mirror partners tie); nothing if all are equal
+        red = {k for k, _ in STAT_COLS if len({t[k] for t in texts}) > 1}
+        rows = [(f"P{i + 1}", TEAM_COLORS[i >= half],
+                 {k: (t[k], "#c62828" if k in red and t[k] == fmt(k, worst[k]) else "black") for k in t})
+                for i, t in enumerate(texts)]
+        rows.append(("weakest", "black", {k: (fmt(k, worst[k]), "black") for k, _ in STAT_COLS}))
+        self.stats.fill(rows)
 
     def _headings(self, near):
-        for k, t in STAT_COLS:
-            self.tree.heading(k, text=t.format(near=near))
+        near = f"{near / analyze.BLOCK_SIZE:.1f}".removesuffix(".0")
+        self.stats.headings({k: t.format(near=near) for k, t in STAT_COLS})
 
     def _load_big(self, r):
         mode = r.get("mode", "full")
@@ -641,6 +815,12 @@ class App:
         sw, sh = self._big_src.size
         f = min(w / sw, h / sh)
         im = self._big_src.resize((max(1, int(sw * f)), max(1, int(sh * f))), Image.LANCZOS)
+        r = self.selected
+        if self.v_radii.get() and r and r.get("starts"):
+            n = s4key.decode(r["key"])["size"]
+            g = engine.row_geo(r)  # the radii this map was measured with (for 1024, scaled by size)
+            im = analyze.draw_radii(im, r["starts"], n, g["radius"] * n / 1024, g["near"] * n / 1024,
+                                    line=max(1, round(1.5 * self.k)))
         self._big_tk = ImageTk.PhotoImage(im)
         self.big.configure(image=self._big_tk, text="")
 

@@ -9,7 +9,9 @@ import s4key
 
 SUPPORTED_MD5 = "153c49ab29946c21d50a3ae7a95c5cf8"
 SCORE_VERSION = 6         # bump when the stored per-player metrics change: older maps get regenerated
-PREVIEW_VERSION = 4       # bump when the pre-screen / preview metrics change: the seed scan starts over
+# the game uses the seed's low 20 bits (the key's last character never changes the map, so it is always 0)
+SEEDS = 1 << 20
+PREVIEW_VERSION = 7       # bump when the pre-screen / preview metrics change: the seed scan starts over
 DEFAULT_GAME_DIRS = [
     r"D:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\games\thesettlers4",
     r"C:\Program Files (x86)\Ubisoft\Ubisoft Game Launcher\games\thesettlers4",
@@ -95,8 +97,9 @@ def stage1(job):
         starts = analyze.player_starts(G)
         pv = np.frombuffer(G.preview(), "<u2").reshape(160, 160)
         sc = d["size"] / 1024
-        per = analyze.evaluate_preview(pv, starts, size=d["size"], radius_tiles=P["radius"] * sc,
-                                       mirror=d["mirror"], near_tiles=P["near"] * sc)
+        R = analyze.radii(P)
+        per = analyze.evaluate_preview(pv, starts, size=d["size"], radius_tiles=R["radius"] * sc,
+                                       mirror=d["mirror"], near_tiles=R["near"] * sc)
         score = analyze.score_tiles(per, d["size"], d["players"], P, mode="preview")
         if render_min is not None and score >= render_min:
             analyze.render_preview(pv, starts, d["size"], scale=1024 / d["size"]).save(
@@ -118,8 +121,9 @@ def stage2(job):
         ok, size, la, lb = G.generate()
         A = np.frombuffer(la, np.uint8).reshape(size, size, 4)
         B = np.frombuffer(lb, np.uint8).reshape(size, size, 4)
-        per = analyze.evaluate_tiles(A, B, starts, radius=int(P["radius"] * size / 1024),
-                                     near=int(P["near"] * size / 1024),
+        R = analyze.radii(P)
+        per = analyze.evaluate_tiles(A, B, starts, radius=int(R["radius"] * size / 1024),
+                                     near=int(R["near"] * size / 1024),
                                      mirror=d["mirror"])
         for details, suffix in ((False, ""), (True, "_details")):  # like the lobby preview + everything
             analyze.render(A, B, starts, scale=1024 / size, details=details).save(
@@ -133,7 +137,8 @@ def rank_key(score, per, size=1024, players=6, params=None):
     P = analyze.params_of(params)
     f = analyze.area_factor(size, players)
     per = [analyze.effective(p, P) for p in per]
-    tie = min(p["mtn"] for p in per) / (P["t_mtn"] * f) + min(p["space"] for p in per) / (P["t_space"] * f)
+    tie = (min(p["mtn"] for p in per) / (analyze.target(P, "mtn") * f)
+           + min(p["space"] for p in per) / (analyze.target(P, "space") * f))
     return (-score, -tie)
 
 
@@ -143,17 +148,40 @@ def rescore(key, per, params=None, mode="full"):
     return analyze.score_tiles(per, d["size"], d["players"], params, mode)
 
 
+# radii of maps stored without them, and of the untagged result files
+LEGACY_GEO = dict(radius=200, near=150)
+
+
 def geo(params):
     P = analyze.params_of(params)
-    return {k: P[k] for k in analyze.GEO_KEYS}
+    return analyze.radii(P)  # in tiles, as stored with every map
 
 
-def _tag(params, keys):
-    """'' for default values, else a short hash, so each parameter set gets its own cache file."""
+def row_geo(r):
+    """The radii a stored map was measured with."""
+    g = r.get("geo", LEGACY_GEO)
+    return {k: g[k] for k in analyze.GEO_KEYS}
+
+
+# The seed scan of these pre-screen values is stored without a tag (they were the defaults when it was written)
+UNTAGGED_SCAN = analyze.params_of(dict(t_mtn=6, t_mtn_near=4, t_space=13, t_space_near=10, t_fair_mtn=0.6,
+                                       t_fair_space=0.6, w_mtn=30, w_mtn_near=15, w_space=30, w_space_near=0,
+                                       w_fair_mtn=10, w_fair_space=5))
+
+
+def _tag(params, keys, base=UNTAGGED_SCAN):
+    """'' for the base values, else a short hash, so each parameter set gets its own cache file."""
     P = analyze.params_of(params)
-    if all(P[k] == analyze.DEFAULT_PARAMS[k] for k in keys):
+    if all(P[k] == base[k] for k in keys):
         return ""
     return "_" + hashlib.md5(json.dumps([P[k] for k in keys]).encode()).hexdigest()[:8]
+
+
+def _geo_tag(g):
+    """Like _tag for the radii in tiles: '' for the legacy ones, which were stored without a tag."""
+    if g == LEGACY_GEO:
+        return ""
+    return "_" + hashlib.md5(json.dumps([g[k] for k in analyze.GEO_KEYS]).encode()).hexdigest()[:8]
 
 
 # ------------------------------------------------------------------ persistent store
@@ -193,11 +221,15 @@ class Store:
         # pre-screen scores depend on the pre-screen parameters, per-player metrics on the radii (images don't)
         self.scan_file = os.path.join(self.dir, f"scan_v{PREVIEW_VERSION}{_tag(self.params, analyze.PREVIEW_KEYS)}.json")
         name = "preview" if mode == "preview" else "deep"
-        self.deep_file = os.path.join(self.dir, f"{name}{_tag(self.params, analyze.GEO_KEYS)}.json")
+        # maps measured with 200 / 150 (the old default radii) keep their untagged file
+        self.deep_file = os.path.join(self.dir, f"{name}{_geo_tag(self.geo)}.json")
         self.shown_file = os.path.join(self.dir, "shown_preview.json" if mode == "preview" else "shown.json")
         self._scan = None                       # key -> pre-screen score (loaded when a search needs it)
         self.deep = _load(self.deep_file, {})   # key -> {score, players, starts, v, geo, mode}
         self.shown = set(_load(self.shown_file, []))
+        self.dismissed_file = os.path.join(self.dir, "dismissed.json")  # maps the user threw out (both modes)
+        self.dismissed = set(_load(self.dismissed_file, []))
+        self.shown |= self.dismissed  # never offered again
         self.lock = threading.Lock()
 
     @staticmethod
@@ -218,7 +250,7 @@ class Store:
 
     def current(self, key):
         d = self.deep.get(key)
-        return (d is not None and d.get("v") == self.version and d.get("geo", self.geo) == self.geo
+        return (d is not None and d.get("v") == self.version and row_geo(d) == self.geo
                 and os.path.exists(self.image(key)))
 
     def entry(self, key, score, per, starts):
@@ -231,12 +263,20 @@ class Store:
             _save(self.deep_file, self.deep)
             _save(self.shown_file, sorted(self.shown))
 
+    def dismiss(self, key, on=True):
+        with self.lock:
+            if on:
+                self.dismissed.add(key); self.shown.add(key)
+            else:
+                self.dismissed.discard(key)
+            _save(self.dismissed_file, sorted(self.dismissed))
+
     def found(self, min_score=0):
         """All fully generated maps (best first)."""
         s = self.settings
         rows = []
         for k, d in list(self.deep.items()):
-            if self.current(k):
+            if self.current(k) and k not in self.dismissed:
                 r = dict(d, key=k, score=rescore(k, d["players"], self.params, self.mode))  # current targets/weights
                 if r["score"] >= min_score:
                     rows.append(r)
@@ -281,14 +321,34 @@ class Search(threading.Thread):
         self.stop_event = threading.Event()
         self.n_found = 0
         self._ok = 0
-        self.stats = dict(scanned=0, generated=0, found=0, want=want, phase="starting", t0=time.time())
+        self.stats = dict(scanned=0, generated=0, found=0, want=want, phase="starting", t0=time.time(),
+                          rejected=0, no_start=0, short={}, only={}, lost={})
 
     def stop(self):
         self.stop_event.set()
 
     def _progress(self, **kw):
         self.stats.update(kw)
-        self.events.put(("progress", dict(self.stats)))
+        self.events.put(("progress", {k: dict(v) if isinstance(v, dict) else v for k, v in self.stats.items()}))
+
+    def _tally(self, sc, per):
+        """Why a map fell short: per score line, how often it missed points (short), how often it alone kept
+        the map below the minimum score (only = full points there would have been enough) and the points it cost
+        in all (lost)."""
+        if sc >= self.min_score or not per:
+            return
+        s, st = self.stats, self.store.settings
+        s["rejected"] += 1
+        if not analyze.start_ok(per, self.store.params, self.store.mode):
+            s["no_start"] += 1
+            return
+        lost = analyze.points_lost(per, st["size"], st["players"], self.store.params, self.store.mode)
+        for k, v in lost.items():
+            s["lost"][k] = s["lost"].get(k, 0) + v
+            if v > 0.05:
+                s["short"][k] = s["short"].get(k, 0) + 1
+                if sc + v >= self.min_score:
+                    s["only"][k] = s["only"].get(k, 0) + 1
 
     def _emit(self, key, d):
         st = self.store
@@ -313,13 +373,13 @@ class Search(threading.Thread):
             with Pool(self.workers, initializer=_init, initargs=(self.exe,)) as pool:
                 rnd = random.Random()
                 while self.n_found < self.want and not self.stop_event.is_set():
-                    if len(st.scan) >= 990_000:
+                    if len(st.scan) >= 0.99 * SEEDS:
                         reason = "all seeds for these settings were checked"
                         break
                     # 2. pre-screen a batch of fresh seeds
                     batch = set()
                     while len(batch) < BATCH:
-                        k = st.key(rnd.randrange(1_000_000))
+                        k = st.key(rnd.randrange(SEEDS))
                         if k not in st.scan:
                             batch.add(k)
                     self._progress(phase="checking seeds")
@@ -337,6 +397,8 @@ class Search(threading.Thread):
                         with st.lock:
                             st.scan[k] = sc
                         self.stats["scanned"] += 1
+                        if preview:
+                            self._tally(sc, per)
                         if preview and sc >= self.min_score:
                             d = st.entry(k, sc, per, starts)
                             with st.lock:
@@ -366,6 +428,7 @@ class Search(threading.Thread):
                                                        self.stop_event, ahead=self.workers):
                         self.stats["generated"] += 1
                         if sc >= 0:
+                            self._tally(sc, per)
                             d = st.entry(k, sc, per, starts)
                             with st.lock:
                                 st.deep[k] = d

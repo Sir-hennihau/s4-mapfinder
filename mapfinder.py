@@ -184,7 +184,7 @@ def main():
         rnd = random.Random(a.rng)
         todo = set()
         while len(todo) < a.scan:
-            k = s4key.encode(rnd.randrange(1_000_000), a.players, a.size, a.land, a.minerals, a.mirror)
+            k = s4key.encode(rnd.randrange(1 << 20), a.players, a.size, a.land, a.minerals, a.mirror)
             if k not in cache:
                 todo.add(k)
         print(f"{settings}\npre-screening {len(todo)} new seeds ({len(cache)} cached, "
