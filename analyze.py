@@ -12,12 +12,13 @@ NB = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1))
 
 
 def player_starts(g):
+    """Castle positions after Init, one per player. The list is read by the map's player count: no end marker
+    follows it (with 6 players the next slot happens to be 0, with 4 it holds leftover data)."""
     arr = g.u32(0x146B0D4)
+    players = g.u32(g.params_ptr + 0x20)
     out = []
-    for i in range(8):
+    for i in range(players):
         o = g.u32(arr + 4 * i)
-        if not o:
-            break
         out.append(struct.unpack("<2i", g.uc.mem_read(o + 8, 8)))
     return out
 
